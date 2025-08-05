@@ -1,4 +1,36 @@
+# Web scraping and automation
 selenium==4.16.0
 webdriver-manager==4.0.1
-yt-dlp==2023.12.30
 requests==2.31.0
+
+# Video and audio processing
+yt-dlp==2023.12.30
+moviepy==1.0.3
+openai-whisper==20231117
+
+# Data analysis and manipulation
+pandas==2.1.4
+numpy==1.24.3
+
+# YouTube API and data collection
+google-api-python-client==2.108.0
+isodate==0.6.1
+
+# Computer vision and image processing
+opencv-python==4.8.1.78
+Pillow==10.1.0
+
+# Natural language processing
+nltk==3.8.1
+
+# Jupyter notebook support (for dataAnalysis.ipynb)
+jupyter==1.0.0
+ipykernel==6.26.0
+
+# Plotting and visualization
+matplotlib==3.7.2
+seaborn==0.12.2
+plotly==5.17.0
+
+# Additional utilities
+python-dotenv==1.0.0
