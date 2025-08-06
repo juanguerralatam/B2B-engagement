@@ -24,13 +24,20 @@ deepface==0.0.79
 tensorflow==2.15.0
 torch>=1.9.0
 torchvision>=0.10.0
+torchaudio>=0.13.0
 facenet-pytorch==2.5.2
 timm==0.9.7
+
+# Audio processing and analysis
+opensmile>=2.5.0
+librosa>=0.10.0
 
 # Natural language processing
 nltk==3.8.1
 textblob==0.17.1
 vaderSentiment==3.3.2
+transformers>=4.30.0
+tokenizers>=0.13.0
 
 # Jupyter notebook support (for dataAnalysis.ipynb)
 jupyter==1.0.0

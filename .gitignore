@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+
+# Project output directories
+output/audio/
+output/video/
+output/text/
+output/json/
+
+# API keys and sensitive data
+*.txt
+!requirements.txt
+!README.txt
+
+# Logs
+*.log

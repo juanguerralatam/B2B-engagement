@@ -1,0 +1,105 @@
+{
+  "cloud_infrastructure": {
+    "aws": [
+      "ec2", "lambda", "s3", "vpc", "cloudformation", "bedrock", "sagemaker", "eks", "rds", "redshift",
+      "cloudtrail", "cloudwatch", "iam", "elb", "autoscaling", "route53", "elasticache", "dynamodb", "athena", "glue",
+      "efs", "sns", "sqs", "api-gateway", "cloudfront", "waf", "shield", "codebuild", "codepipeline", "codecommit"
+    ],
+    "azure": [
+      "virtual-machines", "blob-storage", "functions", "kubernetes-service", "cosmos-db",
+      "logic-apps", "event-hubs", "service-bus", "key-vault", "aks", "app-service", "devops", "monitor", "data-factory", "synapse"
+    ],
+    "gcp": [
+      "compute-engine", "cloud-storage", "cloud-functions", "bigquery", "vertex-ai",
+      "pubsub", "dataproc", "dataflow", "spanner", "cloud-run", "composer", "cloud-sql", "firestore", "memorystore", "cloud-ml"
+    ],
+    "generic": [
+      "kubernetes", "docker", "terraform", "ansible", "helm", "istio", "prometheus",
+      "vault", "consul", "nomad", "openstack", "jenkins-x", "argo-cd", "flux", "harbor", "longhorn", "rook"
+    ]
+  },
+  "devops_operations": {
+    "cicd": [
+      "jenkins", "gitlab", "github-actions", "deployment", "pipeline", "automation",
+      "circleci", "travis-ci", "bamboo", "teamcity", "spinnaker", "drone", "buildkite", "azure-devops-pipelines", "codefresh"
+    ],
+    "monitoring": [
+      "prometheus", "grafana", "cloudwatch", "datadog", "observability", "logging",
+      "newrelic", "appdynamics", "splunk", "elastic", "jaeger", "zipkin", "sentry", "instana", "dynatrace", "pagerduty"
+    ],
+    "infrastructure": [
+      "iac", "scalability", "high-availability", "load-balancing", "auto-scaling",
+      "configuration-management", "infrastructure-as-code", "blue-green-deployment", "canary-release", "disaster-recovery", "backup", "provisioning", "cloud-migration"
+    ]
+  },
+  "ai_ml": {
+    "genai": [
+      "generative-ai", "llm", "bedrock", "chatgpt", "transformers", "neural-networks",
+      "diffusion", "stable-diffusion", "dalle", "midjourney", "gpt-4", "bert", "roberta", "llama", "falcon", "mistral", "embedding-models"
+    ],
+    "ml_ops": [
+      "model-training", "inference", "mlflow", "kubeflow", "feature-store",
+      "tfx", "sagemaker-pipelines", "vertex-ai-pipelines", "model-registry", "model-serving", "model-monitoring", "feature-engineering", "data-versioning"
+    ],
+    "deep_learning": [
+      "pytorch", "tensorflow", "cnn", "rnn", "attention", "embedding",
+      "gan", "autoencoder", "lstm", "gru", "transformer", "seq2seq", "convolution", "dropout", "batchnorm", "activation-function"
+    ]
+  },
+  "enterprise": {
+    "business": [
+      "enterprise", "scalability", "optimization", "roi", "digital-transformation",
+      "erp", "crm", "sap", "oracle", "workday", "netsuite", "business-intelligence", "kpi", "okrs", "change-management"
+    ],
+    "security": [
+      "compliance", "encryption", "authentication", "rbac", "zero-trust",
+      "sso", "iam", "access-control", "audit", "gdpr", "hipaa", "sox", "pci-dss", "iso27001", "risk-management"
+    ],
+    "architecture": [
+      "microservices", "api-gateway", "service-mesh", "event-driven", "serverless",
+      "monolith", "soa", "rest", "graphql", "webhooks", "message-broker", "event-sourcing", "cqrs", "containerization", "scaling"
+    ]
+  },
+  "data_analytics": {
+    "big_data": [
+      "hadoop", "spark", "kafka", "elasticsearch", "cassandra", "mongodb",
+      "hive", "pig", "storm", "flink", "presto", "druid", "clickhouse", "redshift-spectrum", "athena", "databricks"
+    ],
+    "data_science": [
+      "pandas", "numpy", "scikit-learn", "jupyter", "data-pipeline", "etl",
+      "matplotlib", "seaborn", "statsmodels", "xgboost", "lightgbm", "catboost", "feature-selection", "hyperparameter-tuning", "cross-validation", "data-cleaning"
+    ],
+    "visualization": [
+      "tableau", "power-bi", "grafana", "kibana", "d3js", "plotly",
+      "superset", "looker", "ggplot", "altair", "bokeh", "dash", "highcharts", "echarts", "qlik", "microstrategy"
+    ]
+  },
+  "security": {
+    "cybersecurity": [
+      "firewall", "intrusion-detection", "vulnerability", "penetration-testing",
+      "siem", "ids", "ips", "antivirus", "malware", "phishing", "ransomware", "threat-intelligence", "incident-response", "forensics", "endpoint-protection"
+    ],
+    "identity": [
+      "sso", "oauth", "saml", "active-directory", "ldap", "mfa",
+      "openid-connect", "identity-provider", "federation", "directory-services", "passwordless", "biometrics", "access-management", "privileged-access"
+    ],
+    "compliance": [
+      "gdpr", "hipaa", "sox", "pci-dss", "iso27001", "nist",
+      "ccpa", "fedramp", "fisma", "cobit", "basel-ii", "glba", "cmmc", "iso22301", "iso31000", "iso9001"
+    ]
+  },
+  "networking": {
+    "protocols": [
+      "tcp", "udp", "http", "https", "dns", "dhcp", "smtp",
+      "ftp", "snmp", "bgp", "ospf", "eigrp", "icmp", "ipsec", "gre", "vxlan", "mpls"
+    ],
+    "infrastructure": [
+      "cdn", "load-balancer", "vpn", "nat", "subnet", "vlan",
+      "wan", "lan", "sd-wan", "firewall", "router", "switch", "gateway", "proxy", "wireless", "ethernet"
+    ],
+    "monitoring": [
+      "snmp", "netflow", "packet-capture", "bandwidth", "latency", "throughput",
+      "wireshark", "nagios", "zabbix", "solarwinds", "cacti", "observium", "icinga", "prtg", "ntopng", "smokeping"
+    ]
+  }
+}

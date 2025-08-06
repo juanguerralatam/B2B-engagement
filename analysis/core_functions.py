@@ -8,7 +8,7 @@ import os
 import csv
 import subprocess
 
-def detect_optimal_whisper_settings(force_cpu=False):
+def detect_optimal_whisper_settings():
     """Detect optimal Whisper settings based on available hardware."""
     try:
         import psutil
@@ -22,11 +22,7 @@ def detect_optimal_whisper_settings(force_cpu=False):
         
         memory_gb = psutil.virtual_memory().total / (1024**3)
         
-        if force_cpu:
-            device = "cpu"
-            recommended_model = "base"
-            fp16 = False
-        elif torch.cuda.is_available():
+        if torch.cuda.is_available():
             device = "cuda"
             fp16 = True
             if memory_gb >= 16:
@@ -36,7 +32,9 @@ def detect_optimal_whisper_settings(force_cpu=False):
             else:
                 recommended_model = "base"
         else:
-            raise RuntimeError("GPU required but not available")
+            device = "cpu"
+            recommended_model = "base"
+            fp16 = False
         
         return {
             "device": device,
@@ -45,15 +43,9 @@ def detect_optimal_whisper_settings(force_cpu=False):
         }
         
     except ImportError as e:
-        if force_cpu:
-            return {"device": "cpu", "recommended_model": "base", "fp16": False}
-        else:
-            raise RuntimeError("Required packages not installed.")
+        return {"device": "cpu", "recommended_model": "base", "fp16": False}
     except Exception as e:
-        if force_cpu:
-            return {"device": "cpu", "recommended_model": "base", "fp16": False}
-        else:
-            raise RuntimeError(f"GPU detection failed: {e}")
+        return {"device": "cpu", "recommended_model": "base", "fp16": False}
 
 def download_video(video_url, video_id, output_dir=None):
     """Download video using yt-dlp with videoId as filename."""
@@ -143,7 +135,7 @@ def process_single_video(video_id, video_path, args):
     
     if args.download_only:
         return True
-    elif args.extract_audio_only or not args.skip_audio:
+    elif args.extract_audio_only:
         if not args.transcribe_only:
             if not extract_audio(video_path, audio_path):
                 print(f"Failed to extract audio from {video_path}")
@@ -152,9 +144,11 @@ def process_single_video(video_id, video_path, args):
         if args.extract_audio_only:
             return True
     
-    if not args.skip_audio and not os.path.exists(audio_path):
-        print(f"Audio file not found: {audio_path}")
-        return False
+    if not os.path.exists(audio_path):
+        if not args.transcribe_only:
+            if not extract_audio(video_path, audio_path):
+                print(f"Failed to extract audio from {video_path}")
+                return False
     
     transcript = None
     if os.path.exists(transcript_path) and not args.force:
@@ -167,7 +161,7 @@ def process_single_video(video_id, video_path, args):
     
     if not transcript:
         try:
-            settings = detect_optimal_whisper_settings(getattr(args, 'force_cpu', False))
+            settings = detect_optimal_whisper_settings()
             transcript = transcribe_audio(audio_path, args.model, settings["device"], settings["fp16"])
         except Exception as e:
             print(f"Error transcribing audio: {e}")
@@ -181,7 +175,7 @@ def process_single_video(video_id, video_path, args):
         
         if args.narration:
             try:
-                evaluation = evaluate_narration_quality(transcript, args.api_key)
+                evaluation = evaluate_narration_quality(transcript, None)
                 if evaluation:
                     save_evaluation_report(evaluation, transcript_path)
             except Exception as e:

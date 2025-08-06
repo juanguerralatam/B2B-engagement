@@ -114,17 +114,10 @@ This study employs a **quantitative experimental design** using archival data an
 │   ├── feature_extraction/     # Computer vision and NLP processing
 │   ├── analysis/               # Statistical models and ML pipelines
 │   └── visualization/          # Plotting and reporting functions
-├── models/
-│   ├── trained_models/         # Serialized ML models
-│   └── model_evaluation/       # Performance metrics and validation
 ├── notebooks/
 │   ├── exploratory_analysis/   # EDA and data exploration
 │   ├── modeling/               # Model development and testing
 │   └── reporting/              # Results visualization and interpretation
-├── docs/
-│   ├── methodology/            # Detailed methodological documentation
-│   ├── codebook/               # Variable definitions and coding schemes
-│   └── api_documentation/      # Technical documentation
 └── outputs/
     ├── figures/                # Publication-ready visualizations
     ├── tables/                 # Statistical results and summaries
