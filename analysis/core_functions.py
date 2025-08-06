@@ -7,39 +7,37 @@ Main processing logic and data operations
 import os
 import csv
 import subprocess
+from utils import (
+    detect_optimal_device_settings, read_csv_safe, write_csv_safe,
+    get_output_directory, ensure_directory_exists, print_status,
+    get_timestamp, validate_video_id
+)
 
 def detect_optimal_whisper_settings():
     """Detect optimal Whisper settings based on available hardware."""
     try:
-        import psutil
-        import torch
-        
-        # Check for whisper import inside try block 
+        # Check for whisper import
         try:
             import whisper
         except ImportError:
             pass
         
-        memory_gb = psutil.virtual_memory().total / (1024**3)
+        # Use utils function for device detection
+        device_settings = detect_optimal_device_settings()
         
-        if torch.cuda.is_available():
-            device = "cuda"
-            fp16 = True
-            if memory_gb >= 16:
-                recommended_model = "large"
-            elif memory_gb >= 8:
-                recommended_model = "medium"
-            else:
-                recommended_model = "base"
+        # Determine recommended model based on memory
+        memory_gb = device_settings['memory_gb']
+        if device_settings['gpu_available'] and memory_gb >= 16:
+            recommended_model = "large"
+        elif memory_gb >= 8:
+            recommended_model = "medium"
         else:
-            device = "cpu"
             recommended_model = "base"
-            fp16 = False
         
         return {
-            "device": device,
+            "device": device_settings['device'],
             "recommended_model": recommended_model,
-            "fp16": fp16
+            "fp16": device_settings['fp16_enabled']
         }
         
     except ImportError as e:
@@ -51,11 +49,9 @@ def download_video(video_url, video_id, output_dir=None):
     """Download video using yt-dlp with videoId as filename."""
     try:
         if output_dir is None:
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(script_dir)
-            output_dir = os.path.join(project_root, "output", "video")
+            output_dir = get_output_directory("video")
         
-        os.makedirs(output_dir, exist_ok=True)
+        ensure_directory_exists(output_dir)
         output_path = os.path.join(output_dir, f"{video_id}.%(ext)s")
         
         # Look for cookies file in multiple locations
@@ -103,15 +99,7 @@ def download_video(video_url, video_id, output_dir=None):
 
 def read_video_csv(csv_file):
     """Read video IDs and URLs from CSV file."""
-    videos = []
-    try:
-        with open(csv_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                videos.append(row)
-        return videos
-    except Exception as e:
-        return []
+    return read_csv_safe(csv_file, expected_columns=['videoId', 'video_url'])
 
 def process_single_video(video_id, video_path, args):
     """Process a single video for transcription and evaluation."""
@@ -120,17 +108,14 @@ def process_single_video(video_id, video_path, args):
         from audio_functions import extract_audio, transcribe_audio
         from text_functions import evaluate_narration_quality, save_evaluation_report
     except ImportError as e:
-        print(f"Error importing required modules: {e}")
+        print_status(f"Error importing required modules: {e}", "ERROR")
         return False
     
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(script_dir)
-    
-    audio_path = os.path.join(project_root, "output", "audio", f"{video_id}.wav")
-    transcript_path = os.path.join(project_root, "output", "text", f"{video_id}.txt")
+    audio_path = os.path.join(get_output_directory("audio"), f"{video_id}.wav")
+    transcript_path = os.path.join(get_output_directory("text"), f"{video_id}.txt")
     
     if not args.transcribe_only and not os.path.exists(video_path):
-        print(f"Video file not found: {video_path}")
+        print_status(f"Video file not found: {video_path}", "ERROR")
         return False
     
     if args.download_only:
@@ -138,7 +123,7 @@ def process_single_video(video_id, video_path, args):
     elif args.extract_audio_only:
         if not args.transcribe_only:
             if not extract_audio(video_path, audio_path):
-                print(f"Failed to extract audio from {video_path}")
+                print_status(f"Failed to extract audio from {video_path}", "ERROR")
                 return False
         
         if args.extract_audio_only:
@@ -147,7 +132,7 @@ def process_single_video(video_id, video_path, args):
     if not os.path.exists(audio_path):
         if not args.transcribe_only:
             if not extract_audio(video_path, audio_path):
-                print(f"Failed to extract audio from {video_path}")
+                print_status(f"Failed to extract audio from {video_path}", "ERROR")
                 return False
     
     transcript = None
@@ -197,39 +182,27 @@ def save_scene_analysis(video_id, scene_results, csv_file="analysisYoutube.csv")
         else:
             return False
         
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
-        csv_path = os.path.join(project_root, "output", csv_file)
+        csv_path = os.path.join(get_output_directory(), csv_file)
         
-        file_exists = os.path.exists(csv_path)
+        # Read existing data
         existing_data = {}
+        if os.path.exists(csv_path):
+            data_list = read_csv_safe(csv_path)
+            for row in data_list:
+                existing_data[row['videoId']] = row
         
-        if file_exists:
-            try:
-                with open(csv_path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        existing_data[row['videoId']] = row
-            except:
-                pass
-        
+        # Update with new data
         existing_data[video_id] = {
             'videoId': video_id,
             'scene_count': scene_data['scene_count'],
             'average_scene_length': scene_data.get('average_scene_length', 0) if scene_data['scene_count'] > 0 else '',
             'total_duration': scene_data.get('total_duration', 0) if scene_data['scene_count'] > 0 else '',
-            'analysis_date': subprocess.check_output(['date', '+%Y-%m-%d %H:%M:%S']).decode().strip()
+            'analysis_date': get_timestamp()
         }
         
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            if existing_data:
-                fieldnames = ['videoId', 'scene_count', 'average_scene_length', 'total_duration', 'analysis_date']
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                for data in existing_data.values():
-                    writer.writerow(data)
-        
-        return True
+        # Write updated data
+        fieldnames = ['videoId', 'scene_count', 'average_scene_length', 'total_duration', 'analysis_date']
+        return write_csv_safe(list(existing_data.values()), csv_path, fieldnames)
         
     except Exception as e:
         return False
@@ -237,26 +210,24 @@ def save_scene_analysis(video_id, scene_results, csv_file="analysisYoutube.csv")
 def read_scene_analysis(csv_file="analysisYoutube.csv"):
     """Read existing scene analysis results from CSV."""
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
-        csv_path = os.path.join(project_root, "output", csv_file)
+        csv_path = os.path.join(get_output_directory(), csv_file)
         
         if not os.path.exists(csv_path):
             return {}
         
+        data_list = read_csv_safe(csv_path)
         scene_data = {}
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    scene_data[row['videoId']] = {
-                        'scene_count': int(row['scene_count']),
-                        'average_scene_length': float(row['average_scene_length']) if row['average_scene_length'] else 0,
-                        'total_duration': float(row['total_duration']) if row['total_duration'] else 0,
-                        'analysis_date': row.get('analysis_date', '')
-                    }
-                except (ValueError, KeyError):
-                    continue
+        
+        for row in data_list:
+            try:
+                scene_data[row['videoId']] = {
+                    'scene_count': int(row['scene_count']),
+                    'average_scene_length': float(row['average_scene_length']) if row['average_scene_length'] else 0,
+                    'total_duration': float(row['total_duration']) if row['total_duration'] else 0,
+                    'analysis_date': row.get('analysis_date', '')
+                }
+            except (ValueError, KeyError):
+                continue
         
         return scene_data
         
@@ -270,22 +241,16 @@ def save_gender_analysis(video_id, gender_results, csv_file="genderAnalysis.csv"
         if not gender_results:
             return False
         
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
-        csv_path = os.path.join(project_root, "output", csv_file)
+        csv_path = os.path.join(get_output_directory(), csv_file)
         
-        file_exists = os.path.exists(csv_path)
+        # Read existing data
         existing_data = {}
+        if os.path.exists(csv_path):
+            data_list = read_csv_safe(csv_path)
+            for row in data_list:
+                existing_data[row['videoId']] = row
         
-        if file_exists:
-            try:
-                with open(csv_path, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        existing_data[row['videoId']] = row
-            except:
-                pass
-        
+        # Update with new data
         existing_data[video_id] = {
             'videoId': video_id,
             'gender': gender_results['gender'],
@@ -295,8 +260,16 @@ def save_gender_analysis(video_id, gender_results, csv_file="genderAnalysis.csv"
             'female_detections': gender_results.get('female_detections', 0),
             'faces_detected': gender_results['faces_detected'],
             'frames_analyzed': gender_results['frames_analyzed'],
-            'analysis_date': subprocess.check_output(['date', '+%Y-%m-%d %H:%M:%S']).decode().strip()
+            'analysis_date': get_timestamp()
         }
+        
+        # Write updated data
+        fieldnames = ['videoId', 'gender', 'score', 'confidence', 'male_detections', 
+                     'female_detections', 'faces_detected', 'frames_analyzed', 'analysis_date']
+        return write_csv_safe(list(existing_data.values()), csv_path, fieldnames)
+        
+    except Exception as e:
+        return False
         
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             if existing_data:
@@ -315,36 +288,35 @@ def save_gender_analysis(video_id, gender_results, csv_file="genderAnalysis.csv"
 def read_gender_analysis(csv_file="genderAnalysis.csv"):
     """Read existing gender analysis results from CSV."""
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(script_dir)
-        csv_path = os.path.join(project_root, "output", csv_file)
+        csv_path = os.path.join(get_output_directory(), csv_file)
         
         if not os.path.exists(csv_path):
             return {}
         
+        data_list = read_csv_safe(csv_path)
         gender_data = {}
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    # Handle both old and new CSV formats
-                    gender = row.get('gender', row.get('predicted_gender', 'unknown'))
-                    confidence = float(row.get('confidence', 0))
-                    
-                    gender_data[row['videoId']] = {
-                        'gender': gender,
-                        'score': row.get('score', ''),
-                        'confidence': confidence,
-                        'male_detections': int(row.get('male_detections', 0)),
-                        'female_detections': int(row.get('female_detections', 0)),
-                        'faces_detected': int(row['faces_detected']),
-                        'frames_analyzed': int(row['frames_analyzed']),
-                        'analysis_date': row.get('analysis_date', '')
-                    }
-                except (ValueError, KeyError):
-                    continue
+        
+        for row in data_list:
+            try:
+                # Handle both old and new CSV formats
+                gender = row.get('gender', row.get('predicted_gender', 'unknown'))
+                confidence = float(row.get('confidence', 0))
+                
+                gender_data[row['videoId']] = {
+                    'gender': gender,
+                    'score': row.get('score', ''),
+                    'confidence': confidence,
+                    'male_detections': int(row.get('male_detections', 0)),
+                    'female_detections': int(row.get('female_detections', 0)),
+                    'faces_detected': int(row['faces_detected']),
+                    'frames_analyzed': int(row['frames_analyzed']),
+                    'analysis_date': row.get('analysis_date', '')
+                }
+            except (ValueError, KeyError):
+                continue
         
         return gender_data
         
     except Exception as e:
+        return {}
         return {}

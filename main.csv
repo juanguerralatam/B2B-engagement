@@ -1,4 +1,1 @@
-VideoId,Engagement,Naration,visualCongruency,Followers,videoAge,videoLength,sceneNumber,averageSceneLength,humanPresence,faceSum,Gender,Smile,motionMagnitude,motionDirection,Saturation,Brightness,Arousal,Valence,Pitch,Title,Description,hashtagsDescription,URLDescription,Script,
-
-
-
+VideoId,Engagement,Naration,visualCongruency,Followers,videoAge,videoLength,sceneNumber,averageSceneLength,humanPresence,faceSum,Gender,Smile,motionMagnitude,motionDirection,Saturation,Brightness,Arousal,Valence,Pitch,titleSentiment,titleTechnicality,descriptionSentiment,descriptionTechnicality,hashtagsDescription,URLDescription,scriptSentiment,scriptTechnicality

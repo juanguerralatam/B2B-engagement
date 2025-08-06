@@ -16,6 +16,10 @@ from core_functions import (
     detect_optimal_whisper_settings, save_scene_analysis, read_scene_analysis
 )
 from image_functions import detect_scenes, detect_gender_in_video, analyze_video_comprehensive
+from utils import (
+    find_file_in_locations, get_file_extension_variants, validate_video_id,
+    print_status, print_progress, get_output_directory
+)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -42,6 +46,8 @@ def parse_arguments():
                        help='Analyze comprehensive audio features (arousal, valence, pitch)')
     parser.add_argument('--analyze-text-features', action='store_true',
                        help='Analyze comprehensive text features (sentiment, technicality, content)')
+    parser.add_argument('--analyze-basic-features', action='store_true',
+                       help='Extract basic features (followers, age, length, scenes)')
     
     return parser.parse_args()
 
@@ -56,8 +62,8 @@ def check_dependencies(args):
             import scenedetect
         return True
     except ImportError as e:
-        print(f"Missing package: {e.name}")
-        print("Run: python test/env_check.py")
+        print_status(f"Missing package: {e.name}", "ERROR")
+        print_status("Run: python test/env_check.py", "INFO")
         return False
 
 def find_csv_file(csv_file):
@@ -72,19 +78,19 @@ def find_csv_file(csv_file):
         os.path.join(script_dir, csv_file)
     ]
     
-    for path in locations:
-        if os.path.exists(path):
-            return path
-    
-    return csv_file
+    return find_file_in_locations(os.path.basename(csv_file), locations) or csv_file
 
 def find_video_file(video_id):
     """Find existing video file."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    video_dir = os.path.join(script_dir, "output", "video")
+    if not validate_video_id(video_id):
+        return None
+        
+    video_dir = get_output_directory("video")
+    extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov']
+    filenames = get_file_extension_variants(video_id, extensions)
     
-    for ext in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
-        path = os.path.join(video_dir, f"{video_id}{ext}")
+    for filename in filenames:
+        path = os.path.join(video_dir, filename)
         if os.path.exists(path):
             return path
     return None
@@ -418,14 +424,14 @@ def main():
     csv_file = find_csv_file(args.csv_file)
     videos = read_video_csv(csv_file)
     if not videos:
-        print("No videos found")
+        print_status("No videos found", "ERROR")
         return
     
     # Filter specific video
     if args.video_id:
         videos = [v for v in videos if v['videoId'] == args.video_id]
         if not videos:
-            print(f"Video ID '{args.video_id}' not found")
+            print_status(f"Video ID '{args.video_id}' not found", "ERROR")
             return
     
     # Load existing analysis
@@ -434,10 +440,13 @@ def main():
     # Process videos
     successful = 0
     failed = 0
+    total_videos = len(videos)
     
-    for video in videos:
+    for i, video in enumerate(videos, 1):
         video_id = video['videoId']
         video_url = video['video_url']
+        
+        print_progress(i, total_videos, f"Processing {video_id}")
         
         # Find or download video
         video_path = None
@@ -489,6 +498,18 @@ def main():
                 failed += 1
             continue
         
+        if args.analyze_basic_features:
+            # Process basic features using basic_functions
+            from basic_functions import extract_basic_features_from_data, load_config
+            config = load_config()
+            if extract_basic_features_from_data(config):
+                print_status("Basic features extraction completed", "SUCCESS")
+                return
+            else:
+                print_status("Basic features extraction failed", "ERROR")
+                return
+        
+        # Normal processing
         # Normal processing
         try:
             if process_single_video(video_id, video_path, args):
@@ -496,10 +517,10 @@ def main():
             else:
                 failed += 1
         except Exception as e:
-            print(f"Error processing {video_id}: {e}")
+            print_status(f"Error processing {video_id}: {e}", "ERROR")
             failed += 1
     
-    print(f"Completed: {successful} successful, {failed} failed")
+    print_status(f"Completed: {successful} successful, {failed} failed", "SUCCESS")
 
 if __name__ == "__main__":
     main()

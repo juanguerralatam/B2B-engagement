@@ -3,6 +3,10 @@ import csv
 from datetime import datetime
 import googleapiclient.discovery
 import isodate
+from utils import (
+    read_channel_ids_from_csv, write_csv_safe, print_status, 
+    print_progress, validate_video_id
+)
 
 # Get API key from environment variable or default
 API_KEY = os.getenv('YOUTUBE_API_KEY', "AIzaSyAElw-2HxeBlTQAdbn647_dIP0rAF5u-d8")
@@ -14,7 +18,7 @@ def get_youtube_service():
     try:
         return googleapiclient.discovery.build("youtube", "v3", developerKey=API_KEY)
     except Exception as e:
-        print(f"Error initializing YouTube service: {e}")
+        print_status(f"Error initializing YouTube service: {e}", "ERROR")
         return None
 
 def get_uploads_playlist_id(youtube, channel_id):
@@ -22,7 +26,7 @@ def get_uploads_playlist_id(youtube, channel_id):
         response = youtube.channels().list(part="contentDetails", id=channel_id).execute()
         return response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
     except Exception as e:
-        print(f"Error fetching uploads playlist ID: {e}")
+        print_status(f"Error fetching uploads playlist ID: {e}", "ERROR")
         return None
 
 def get_video_metadata(youtube, playlist_id, max_results=None):
@@ -119,107 +123,37 @@ def get_video_metadata(youtube, playlist_id, max_results=None):
 
 def write_to_csv(data, filename):
     if not data:
-        print("No data to write.")
+        print_status("No data to write", "WARNING")
         return
 
-    try:
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=data[0].keys())
-            writer.writeheader()
-            writer.writerows(data)
-        print(f"CSV written: {filename} with {len(data)} videos")
-    except IOError as e:
-        print(f"CSV write error: {e}")
+    if write_csv_safe(data, filename):
+        print_status(f"CSV written: {filename} with {len(data)} videos", "SUCCESS")
+    else:
+        print_status(f"CSV write error for: {filename}", "ERROR")
 
 def process_all_channels(channel_ids, youtube_service, max_results_per_channel=None):
     """Process all channels and collect video data."""
     all_videos = []
     
     for i, channel_id in enumerate(channel_ids, 1):
-        print(f"\nProcessing channel {i}/{len(channel_ids)}: {channel_id}")
+        print_progress(i, len(channel_ids), f"Processing channel {channel_id}")
         
         playlist_id = get_uploads_playlist_id(youtube_service, channel_id)
         if playlist_id:
             videos = get_video_metadata(youtube_service, playlist_id, max_results_per_channel)
             if videos:
-                print(f"Retrieved {len(videos)} videos from channel {channel_id}")
+                print_status(f"Retrieved {len(videos)} videos from channel {channel_id}", "SUCCESS")
                 all_videos.extend(videos)
             else:
-                print(f"No videos found for channel {channel_id}")
+                print_status(f"No videos found for channel {channel_id}", "WARNING")
         else:
-            print(f"Could not get playlist ID for channel {channel_id}")
+            print_status(f"Could not get playlist ID for channel {channel_id}", "ERROR")
     
     return all_videos
 
-def read_channel_ids_from_csv(csv_filename):
-    """Read channel IDs from a CSV file. Supports different CSV formats."""
-    channel_ids = []
-    
-    if not os.path.exists(csv_filename):
-        print(f"CSV file {csv_filename} not found.")
-        return channel_ids
-    
-    try:
-        with open(csv_filename, 'r', encoding='utf-8') as csvfile:
-            # Check if file is empty
-            content = csvfile.read().strip()
-            if not content:
-                print(f"CSV file {csv_filename} is empty.")
-                return channel_ids
-            
-            csvfile.seek(0)  # Reset file pointer
-            
-            # Try to detect CSV format
-            reader = csv.reader(csvfile)
-            rows = list(reader)
-            
-            if not rows:
-                print(f"No data found in {csv_filename}")
-                return channel_ids
-            
-            # Check if first row might be a header
-            first_row = rows[0]
-            
-            # Look for common header names for channel IDs
-            header_indicators = ['channel_id', 'channelid', 'id', 'channel', 'youtube_id']
-            has_header = any(cell.lower().strip() in header_indicators for cell in first_row)
-            
-            if has_header:
-                # Find the column with channel IDs
-                header_row = [cell.lower().strip() for cell in first_row]
-                channel_id_col = None
-                
-                # Look for 'id' column specifically (your file has 'name,id' structure)
-                for i, header in enumerate(header_row):
-                    if header in header_indicators:
-                        channel_id_col = i
-                        break
-                
-                if channel_id_col is not None:
-                    for row in rows[1:]:  # Skip header
-                        if len(row) > channel_id_col and row[channel_id_col].strip():
-                            channel_ids.append(row[channel_id_col].strip())
-                else:
-                    print("Could not find channel ID column in CSV header")
-            else:
-                # No header, assume first column contains channel IDs
-                for row in rows:
-                    if row and row[0].strip():
-                        channel_ids.append(row[0].strip())
-            
-        print(f"Found {len(channel_ids)} channel IDs in {csv_filename}")
-        for i, channel_id in enumerate(channel_ids, 1):
-            print(f"  {i}. {channel_id}")
-        
-        return channel_ids
-        
-    except Exception as e:
-        print(f"Error reading CSV file {csv_filename}: {e}")
-        return channel_ids
-
 if __name__ == "__main__":
     if API_KEY == "YOUR_API_KEY":
-        print("Please set your API key.")
+        print_status("Please set your API key", "ERROR")
     else:
         youtube = get_youtube_service()
         if youtube:
@@ -227,18 +161,18 @@ if __name__ == "__main__":
             channel_ids = read_channel_ids_from_csv(CHANNEL_CSV)
             
             if not channel_ids:
-                print(f"No channel IDs found in {CHANNEL_CSV}. Please add channel IDs to the CSV file.")
+                print_status(f"No channel IDs found in {CHANNEL_CSV}. Please add channel IDs to the CSV file", "ERROR")
                 exit(1)
             
-            print(f"Processing {len(channel_ids)} channels...")
+            print_status(f"Processing {len(channel_ids)} channels...", "INFO")
             
             # Process all channels
             all_videos = process_all_channels(channel_ids, youtube, MAX_RESULTS)
             
             if all_videos:
                 write_to_csv(all_videos, CSV_FILENAME)
-                print(f"\nTotal videos collected: {len(all_videos)}")
+                print_status(f"Total videos collected: {len(all_videos)}", "SUCCESS")
             else:
-                print("No video metadata retrieved from any channel.")
+                print_status("No video metadata retrieved from any channel", "ERROR")
         else:
-            print("Failed to initialize YouTube service.")
+            print_status("Failed to initialize YouTube service", "ERROR")

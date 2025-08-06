@@ -1,54 +1,60 @@
+# Core dependencies for B2B Engagement Analysis
+# Install with: pip install -r requirements.txt
+
 # Web scraping and automation
-selenium==4.16.0
-webdriver-manager==4.0.1
-requests==2.31.0
+selenium>=4.16.0
+webdriver-manager>=4.0.1
+requests>=2.31.0
 
 # Video and audio processing
-yt-dlp==2023.12.30
-moviepy==1.0.3
-openai-whisper==20231117
-scenedetect[opencv]==0.6.2
+yt-dlp>=2023.12.30
+moviepy>=1.0.3
+openai-whisper>=20231117
+scenedetect[opencv]>=0.6.2
 
 # Data analysis and manipulation
-pandas==2.1.4
-numpy==1.24.3
+pandas>=2.1.4
+numpy>=1.24.3
 
 # YouTube API and data collection
-google-api-python-client==2.108.0
-isodate==0.6.1
+google-api-python-client>=2.108.0
+isodate>=0.6.1
 
 # Computer vision and image processing
-opencv-python==4.8.1.78
-Pillow==10.1.0
-deepface==0.0.79
-tensorflow==2.15.0
+opencv-python>=4.8.1.78
+Pillow>=10.1.0
+deepface>=0.0.79
+tensorflow>=2.15.0
 torch>=1.9.0
 torchvision>=0.10.0
 torchaudio>=0.13.0
-facenet-pytorch==2.5.2
-timm==0.9.7
+facenet-pytorch>=2.5.2
+timm>=0.9.7
 
 # Audio processing and analysis
 opensmile>=2.5.0
 librosa>=0.10.0
 
 # Natural language processing
-nltk==3.8.1
-textblob==0.17.1
-vaderSentiment==3.3.2
+nltk>=3.8.1
+textblob>=0.17.1
+vaderSentiment>=3.3.2
 transformers>=4.30.0
 tokenizers>=0.13.0
 
 # Jupyter notebook support (for dataAnalysis.ipynb)
-jupyter==1.0.0
-ipykernel==6.26.0
+jupyter>=1.0.0
+ipykernel>=6.26.0
 
 # Plotting and visualization
-matplotlib==3.7.2
-seaborn==0.12.2
-plotly==5.17.0
+matplotlib>=3.7.2
+seaborn>=0.12.2
+plotly>=5.17.0
 
 # Additional utilities
-python-dotenv==1.0.0
-psutil==5.9.6
-browser-cookie3==0.16.5
+python-dotenv>=1.0.0
+psutil>=5.9.6
+browser-cookie3>=0.16.5
+
+# Optional dependencies for enhanced functionality
+chardet>=5.0.0  # For better encoding detection

@@ -11,19 +11,22 @@ import re
 import torch
 import numpy as np
 from typing import Dict, List, Optional, Tuple
+from utils import (
+    load_text_file_safe, save_json_file, get_output_directory,
+    ensure_directory_exists, print_status, get_timestamp, get_project_root
+)
 
 # Import technical vocabularies from external file
 import sys
-import os
 # Add the project root to the path to import from input folder
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = get_project_root()
 sys.path.insert(0, os.path.join(project_root, 'input'))
 
 try:
     from technical_vocabularies import TECHNICAL_VOCABULARIES
 except ImportError:
     # Fallback if import fails
-    print("Warning: Could not import technical vocabularies, using default")
+    print_status("Warning: Could not import technical vocabularies, using default", "WARNING")
     TECHNICAL_VOCABULARIES = {
         'cloud_infrastructure': {
             'aws': ['ec2', 'lambda', 's3', 'vpc', 'cloudformation'],
@@ -340,58 +343,35 @@ def count_content_elements_regex(description: str) -> Tuple[float, float]:
 
 def load_transcript_safe(transcript_path: str) -> Optional[str]:
     """Safely load transcript with encoding detection."""
-    try:
-        if not transcript_path or not os.path.exists(transcript_path):
-            return None
-            
-        # Try UTF-8 first
-        try:
-            with open(transcript_path, 'r', encoding='utf-8') as f:
-                return f.read().strip()
-        except UnicodeDecodeError:
-            # Fallback to other encodings
-            for encoding in ['latin-1', 'cp1252', 'iso-8859-1']:
-                try:
-                    with open(transcript_path, 'r', encoding=encoding) as f:
-                        return f.read().strip()
-                except UnicodeDecodeError:
-                    continue
-                    
-        return None
-        
-    except Exception as e:
-        return None
+    return load_text_file_safe(transcript_path)
 
 def save_evaluation_report(evaluation, transcript_path, output_dir=None):
     """Save the narration evaluation report to a file."""
     try:
         if not evaluation:
-            print("No evaluation data to save")
+            print_status("No evaluation data to save", "WARNING")
             return None
         
         if output_dir is None:
-            # Get the project root and use output/json directory
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            project_root = os.path.dirname(script_dir)
-            output_dir = os.path.join(project_root, "output", "json")
+            output_dir = get_output_directory("json")
             
-        os.makedirs(output_dir, exist_ok=True)
+        ensure_directory_exists(output_dir)
         
         base_name = os.path.splitext(os.path.basename(transcript_path))[0]
         report_path = os.path.join(output_dir, f"{base_name}_evaluation.json")
         
         report_data = {
-            "timestamp": subprocess.check_output(['date', '+%Y-%m-%d %H:%M:%S']).decode().strip(),
+            "timestamp": get_timestamp(),
             "transcript_file": transcript_path,
             "evaluation": evaluation
         }
         
-        with open(report_path, 'w', encoding='utf-8') as f:
-            json.dump(report_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Evaluation report saved to: {report_path}")
-        return report_path
+        if save_json_file(report_data, report_path, ensure_dir=False):
+            print_status(f"Evaluation report saved to: {report_path}", "SUCCESS")
+            return report_path
+        else:
+            return None
         
     except Exception as e:
-        print(f"Error saving evaluation report: {e}")
+        print_status(f"Error saving evaluation report: {e}", "ERROR")
         return None

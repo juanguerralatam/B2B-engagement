@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""
+Basic Functions for Feature Extraction
+Contains core functions for extracting basic video features
+"""
+
+import os
+import sys
+import json
+import pandas as pd
+from datetime import datetime
+from typing import Dict, Optional, List
+
+# Import utilities
+try:
+    from utils import ensure_directory_exists, print_status
+except ImportError:
+    def ensure_directory_exists(path):
+        os.makedirs(path, exist_ok=True)
+    
+    def print_status(message, level="INFO"):
+        levels = {"INFO": "", "WARNING": "⚠️ ", "ERROR": "❌ ", "SUCCESS": "✅ "}
+        prefix = levels.get(level.upper(), "")
+        print(f"{prefix}{message}")
+
+def load_config() -> Dict:
+    """Load configuration from config.json"""
+    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')
+    try:
+        with open(config_path, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print_status("Warning: config.json not found, using defaults", "WARNING")
+        return {
+            "paths": {
+                "input_dir": "input/",
+                "output_dir": "output/",
+                "video_dir": "output/video/",
+                "channels_file": "input/B2BcloudChannels.csv"
+            }
+        }
+
+def load_followers_data(config: Dict) -> Dict[str, int]:
+    """Load follower data from B2BcloudChannels.csv"""
+    channels_file = config['paths']['channels_file']
+    
+    if not os.path.exists(channels_file):
+        print_status(f"Channels file not found: {channels_file}", "ERROR")
+        return {}
+    
+    try:
+        df = pd.read_csv(channels_file)
+        # Create mapping from channel id to followers
+        followers_map = dict(zip(df['id'], df['Followers']))
+        print_status(f"Loaded follower data for {len(followers_map)} channels", "SUCCESS")
+        return followers_map
+    except Exception as e:
+        print_status(f"Error loading followers data: {e}", "ERROR")
+        return {}
+
+def load_video_metadata(config: Dict) -> Optional[pd.DataFrame]:
+    """Load video metadata from available CSV files"""
+    input_dir = config['paths']['input_dir']
+    output_dir = config['paths']['output_dir']
+    
+    # Try different possible filenames, prioritizing files with more metadata
+    possible_files = [
+        ('output', 'B2BcloudVideos.csv'),  # This has the most complete metadata
+        ('output', 'analysisYoutube.csv'),
+        ('input', 'downloadVideo.csv'),
+        ('input', 'description.csv')
+    ]
+    
+    for directory_name, filename in possible_files:
+        directory = output_dir if directory_name == 'output' else input_dir
+        filepath = os.path.join(directory, filename)
+        if os.path.exists(filepath):
+            try:
+                df = pd.read_csv(filepath)
+                print_status(f"Loaded video metadata from {directory_name}/{filename}", "SUCCESS")
+                print_status(f"Available columns: {list(df.columns)}", "INFO")
+                return df
+            except Exception as e:
+                print_status(f"Error reading {filepath}: {e}", "WARNING")
+                continue
+    
+    print_status("No video metadata file found", "ERROR")
+    return None
+
+def calculate_video_age(upload_date_str: str) -> Optional[int]:
+    """Calculate video age in days from upload date string"""
+    if not upload_date_str or pd.isna(upload_date_str):
+        return None
+    
+    try:
+        # Try different date formats
+        date_formats = [
+            '%Y-%m-%d %H:%M:%S UTC',  # 2025-07-17 00:07:21 UTC
+            '%Y-%m-%d', 
+            '%Y-%m-%dT%H:%M:%SZ', 
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%dT%H:%M:%S.%fZ',
+            '%m/%d/%Y',
+            '%d/%m/%Y'
+        ]
+        
+        for fmt in date_formats:
+            try:
+                upload_date = datetime.strptime(str(upload_date_str), fmt)
+                age_days = (datetime.now() - upload_date).days
+                return age_days
+            except ValueError:
+                continue
+        
+        print_status(f"Could not parse date: {upload_date_str}", "WARNING")
+        return None
+    except Exception as e:
+        return None
+
+def parse_duration_to_seconds(duration_str: str) -> Optional[int]:
+    """Parse duration string to seconds"""
+    if not duration_str or pd.isna(duration_str):
+        return None
+    
+    try:
+        duration_str = str(duration_str).strip()
+        
+        # If it's already a number, return it
+        try:
+            return int(float(duration_str))
+        except ValueError:
+            pass
+        
+        # Parse time format (HH:MM:SS or MM:SS)
+        if ':' in duration_str:
+            parts = duration_str.split(':')
+            if len(parts) == 2:  # MM:SS
+                return int(parts[0]) * 60 + int(parts[1])
+            elif len(parts) == 3:  # HH:MM:SS
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        
+        # Parse ISO 8601 duration (PT#M#S format)
+        if duration_str.startswith('PT'):
+            import re
+            pattern = r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?'
+            match = re.match(pattern, duration_str)
+            if match:
+                hours = int(match.group(1) or 0)
+                minutes = int(match.group(2) or 0)
+                seconds = int(match.group(3) or 0)
+                return hours * 3600 + minutes * 60 + seconds
+        
+        return None
+    except Exception as e:
+        return None
+
+def simple_scene_analysis(video_path: str) -> Dict[str, Optional[float]]:
+    """Simple scene analysis - try to use existing function or provide estimates"""
+    if not os.path.exists(video_path):
+        return {"sceneNumber": None, "averageSceneLength": None}
+    
+    try:
+        # Try to import and use scene detection
+        from image_functions import detect_scenes
+        
+        # Extract video_id from path
+        video_id = os.path.basename(video_path).replace('.mp4', '')
+        
+        # Try scene detection with default threshold first
+        scene_data = detect_scenes(video_path, video_id, threshold=30.0)
+        
+        # If no scenes detected, try with a lower threshold
+        if scene_data and scene_data.get('scene_count', 0) == 0:
+            scene_data = detect_scenes(video_path, video_id, threshold=15.0)
+        
+        # If still no scenes, try with an even lower threshold
+        if scene_data and scene_data.get('scene_count', 0) == 0:
+            scene_data = detect_scenes(video_path, video_id, threshold=5.0)
+        
+        if scene_data and isinstance(scene_data, dict):
+            return {
+                "sceneNumber": scene_data.get('scene_count'),
+                "averageSceneLength": scene_data.get('average_scene_length')
+            }
+    except ImportError:
+        # Fallback: estimate scenes based on video length
+        try:
+            # Get video duration using moviepy or similar
+            from moviepy.editor import VideoFileClip
+            with VideoFileClip(video_path) as clip:
+                duration = clip.duration
+                # Estimate ~1 scene per 10-30 seconds (rough estimate)
+                estimated_scenes = max(1, int(duration / 20))
+                avg_scene_length = duration / estimated_scenes
+                
+                return {
+                    "sceneNumber": estimated_scenes,
+                    "averageSceneLength": avg_scene_length
+                }
+        except Exception:
+            pass
+    except Exception as e:
+        print_status(f"Error analyzing scenes for {video_path}: {e}", "WARNING")
+    
+    return {"sceneNumber": None, "averageSceneLength": None}
+
+def extract_basic_features_from_data(config: Dict) -> bool:
+    """Main function to extract basic features"""
+    print_status("Starting basic feature extraction...", "INFO")
+    
+    # Load followers data
+    followers_map = load_followers_data(config)
+    if not followers_map:
+        print_status("No follower data available", "ERROR")
+        return False
+    
+    # Load video metadata
+    video_metadata = load_video_metadata(config)
+    if video_metadata is None:
+        print_status("No video metadata available", "ERROR")
+        return False
+    
+    print_status(f"Found metadata for {len(video_metadata)} videos", "INFO")
+    print_status(f"Available columns: {list(video_metadata.columns)}", "INFO")
+    
+    # Prepare output data
+    output_data = []
+    video_dir = config['paths']['video_dir']
+    
+    print_status(f"Processing {len(video_metadata)} videos...", "INFO")
+    
+    for idx, row in video_metadata.iterrows():
+        try:
+            # Get basic info - try different column names
+            video_id = row.get('videoId', row.get('id', row.get('video_id', '')))
+            channel_id = row.get('channelId', row.get('channel_id', row.get('channelID', '')))
+            
+            if not video_id or not channel_id:
+                print_status(f"Skipping row {idx}: missing videoId or channelId", "WARNING")
+                continue
+            
+            # Get followers
+            followers = followers_map.get(channel_id, None)
+            
+            # Calculate video age
+            video_age = None
+            upload_date = row.get('publishedAt', row.get('upload_date', row.get('published_at', '')))
+            if upload_date:
+                video_age = calculate_video_age(str(upload_date))
+            
+            # Get video length (duration)
+            video_length = None
+            duration_field = row.get('duration', row.get('videoLength', row.get('video_length', None)))
+            if duration_field:
+                video_length = parse_duration_to_seconds(str(duration_field))
+            
+            # Analyze scenes
+            video_path = os.path.join(video_dir, f"{video_id}.mp4")
+            scene_analysis = simple_scene_analysis(video_path)
+            
+            # Create output record
+            record = {
+                'channelId': channel_id,
+                'videoId': video_id,
+                'Followers': followers,
+                'videoAge': video_age,
+                'videoLength': video_length,
+                'sceneNumber': scene_analysis['sceneNumber'],
+                'averageSceneLength': scene_analysis['averageSceneLength']
+            }
+            
+            output_data.append(record)
+            
+            if (idx + 1) % 10 == 0:
+                print_status(f"Processed {idx + 1}/{len(video_metadata)} videos", "INFO")
+        
+        except Exception as e:
+            print_status(f"Error processing video {idx}: {e}", "WARNING")
+            continue
+    
+    # Save results
+    if output_data:
+        output_file = os.path.join(config['paths']['output_dir'], 'basic_features.csv')
+        ensure_directory_exists(os.path.dirname(output_file))
+        
+        output_df = pd.DataFrame(output_data)
+        output_df.to_csv(output_file, index=False)
+        
+        print_status(f"Saved {len(output_data)} records to {output_file}", "SUCCESS")
+        print_status(f"Features extracted: channelId, videoId, Followers, videoAge, videoLength, sceneNumber, averageSceneLength", "INFO")
+        return True
+    else:
+        print_status("No data to save", "ERROR")
+        return False
