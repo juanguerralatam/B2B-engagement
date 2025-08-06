@@ -4,7 +4,8 @@ from datetime import datetime
 import googleapiclient.discovery
 import isodate
 
-API_KEY = "AIzaSyAElw-2HxeBlTQAdbn647_dIP0rAF5u-d8"
+# Get API key from environment variable or default
+API_KEY = os.getenv('YOUTUBE_API_KEY', "AIzaSyAElw-2HxeBlTQAdbn647_dIP0rAF5u-d8")
 MAX_RESULTS = None  # Set to None to retrieve all videos
 CSV_FILENAME = "all_channels_videos.csv"
 CHANNEL_CSV = "channel.csv"
