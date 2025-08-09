@@ -28,6 +28,47 @@ def load_config() -> Dict:
     from utils import load_config_file
     return load_config_file()
 
+def check_already_processed(video_id: str, output_file: str, force: bool = False) -> bool:
+    """Check if a video has already been processed in the output file."""
+    if force or not os.path.exists(output_file):
+        return False
+    
+    try:
+        existing_df = pd.read_csv(output_file)
+        return video_id in existing_df.get('VideoId', existing_df.get('videoId', pd.Series())).values
+    except:
+        return False
+
+def save_features_to_csv(video_id: str, features_data: Dict, output_file: str) -> bool:
+    """Common function to save feature data to CSV with proper handling."""
+    try:
+        # Add timestamp
+        features_data['analysis_date'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Handle existing file
+        if os.path.exists(output_file):
+            existing_df = pd.read_csv(output_file)
+            # Remove existing entry for this video if it exists
+            id_col = 'VideoId' if 'VideoId' in existing_df.columns else 'videoId'
+            existing_df = existing_df[existing_df[id_col] != video_id]
+            # Add new entry
+            new_row_df = pd.DataFrame([features_data])
+            if len(existing_df) > 0:
+                new_df = pd.concat([existing_df, new_row_df], ignore_index=True)
+            else:
+                new_df = new_row_df
+        else:
+            # Create new file
+            ensure_directory_exists(os.path.dirname(output_file))
+            new_df = pd.DataFrame([features_data])
+        
+        new_df.to_csv(output_file, index=False)
+        return True
+        
+    except Exception as e:
+        print_status(f"Error saving features for {video_id}: {e}", "ERROR")
+        return False
+
 def load_followers_data(config: Dict) -> Dict[str, int]:
     """Load follower data from channels file"""
     channels_file = config['paths']['channels_file']
@@ -243,34 +284,22 @@ def extract_basic_features_from_data(config: Dict) -> bool:
             # Analyze scenes - handle different video file naming patterns
             video_path = None
             
-            # Try different file naming patterns
-            possible_patterns = [
-                f"{video_id}.mp4",  # Simple: videoId.mp4
-                f"{video_id} - *.mp4",  # Pattern: videoId - title.mp4
-            ]
+            # Try different file naming patterns  
+            extensions = ['.mp4', '.mkv', '.webm', '.avi', '.mov']
             
-            for pattern in possible_patterns:
-                if '*' in pattern:
-                    # Use glob to find files matching the pattern
-                    import glob
-                    matching_files = glob.glob(os.path.join(video_dir, pattern))
-                    if matching_files:
-                        video_path = matching_files[0]  # Take the first match
-                        break
-                else:
-                    # Direct file check
-                    test_path = os.path.join(video_dir, pattern)
-                    if os.path.exists(test_path):
-                        video_path = test_path
-                        break
+            # First try simple pattern: videoId.ext
+            for ext in extensions:
+                simple_path = os.path.join(video_dir, f"{video_id}{ext}")
+                if os.path.exists(simple_path):
+                    video_path = simple_path
+                    break
             
             # If no video found, try a more thorough search
             if not video_path:
                 import glob
-                # Search for any file that starts with the video ID
                 search_pattern = os.path.join(video_dir, f"{video_id}*")
                 matching_files = glob.glob(search_pattern)
-                video_files = [f for f in matching_files if f.endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov'))]
+                video_files = [f for f in matching_files if f.endswith(tuple(extensions))]
                 if video_files:
                     video_path = video_files[0]
             

@@ -13,19 +13,15 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from utils import (
     load_text_file_safe, save_json_file, get_output_directory,
-    ensure_directory_exists, print_status, get_timestamp, get_project_root
+    ensure_directory_exists, print_status, get_timestamp, get_project_root,
+    load_config_file
 )
 
 # Import technical vocabularies from external file
-import sys
-import json
-# Add the project root to the path to import from input folder
 project_root = get_project_root()
-sys.path.insert(0, os.path.join(project_root, 'input'))
 
 try:
     # Load config to get vocabulary file path
-    from utils import load_config_file
     config = load_config_file()
     vocab_file = config.get("paths", {}).get("technical_vocabularies", "input/technical_vocabularies.json")
     
@@ -38,9 +34,9 @@ try:
             TECHNICAL_VOCABULARIES = json.load(f)
         print_status("Loaded technical vocabularies from JSON file", "SUCCESS")
     else:
-        # Try to import from Python module as fallback
-        from technical_vocabularies import TECHNICAL_VOCABULARIES
-except (ImportError, FileNotFoundError, json.JSONDecodeError) as e:
+        raise FileNotFoundError("Vocabulary file not found")
+        
+except Exception as e:
     # Fallback if import fails
     print_status(f"Warning: Could not load technical vocabularies ({e}), using default", "WARNING")
     TECHNICAL_VOCABULARIES = {
@@ -148,7 +144,7 @@ def analyze_text_comprehensive(video_id: str, title: str, description: str, tran
     """
     try:
         # Load transcript
-        transcript_text = load_transcript_safe(transcript_path)
+        transcript_text = load_text_file_safe(transcript_path)
         
         # Extract all features
         title_sentiment = extract_sentiment_bert(title)
@@ -194,13 +190,8 @@ def extract_sentiment_bert(text: str) -> Optional[float]:
         from transformers import pipeline
         import torch
         
-        # Use existing device detection
-        try:
-            from core_functions import detect_optimal_whisper_settings
-            settings = detect_optimal_whisper_settings()
-            device = 0 if settings["device"] == "cuda" else -1
-        except:
-            device = 0 if torch.cuda.is_available() else -1
+        # Use GPU if available, otherwise CPU
+        device = 0 if torch.cuda.is_available() else -1
         
         # Initialize BERT sentiment analyzer with GPU
         sentiment_analyzer = pipeline(
@@ -356,10 +347,6 @@ def count_content_elements_regex(description: str) -> Tuple[float, float]:
         
     except Exception as e:
         return 0.0, 0.0
-
-def load_transcript_safe(transcript_path: str) -> Optional[str]:
-    """Safely load transcript with encoding detection."""
-    return load_text_file_safe(transcript_path)
 
 def save_evaluation_report(evaluation, transcript_path, output_dir=None):
     """Save the narration evaluation report to a file."""

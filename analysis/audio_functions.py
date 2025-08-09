@@ -6,6 +6,8 @@ Audio extraction and transcription using Whisper
 
 import os
 import subprocess
+from utils import load_config_file
+from core_functions import detect_optimal_whisper_settings
 
 def extract_audio(video_path, audio_path):
     """Extract audio from video file using FFmpeg or MoviePy."""
@@ -40,34 +42,85 @@ def transcribe_audio(audio_path, model_size="base", device=None, fp16=None):
     """Transcribe audio to text using OpenAI Whisper on GPU."""
     try:
         import whisper
-        import torch
         
         # Force GPU settings if not provided
         if device is None or fp16 is None:
-            try:
-                from core_functions import detect_optimal_whisper_settings
-                settings = detect_optimal_whisper_settings()
-                device = settings["device"]
-                fp16 = settings["fp16"]
-            except Exception:
-                device = "cpu"
-                fp16 = False
+            settings = detect_optimal_whisper_settings()
+            device = settings["device"]
+            fp16 = settings["fp16"]
         
         model = whisper.load_model(model_size, device=device)
         result = model.transcribe(audio_path, fp16=fp16, verbose=False)
         
         transcript = result["text"].strip()
-        language = result.get("language", "unknown")
         
-        if transcript:
-            return transcript
-        else:
-            return None
+        return transcript if transcript else None
             
     except ImportError as e:
         raise ImportError("Required packages not installed.")
     except Exception as e:
         return None
+
+def _load_audio_with_librosa(audio_path):
+    """Common audio loading function for all feature extractors."""
+    try:
+        import librosa
+        import numpy as np
+        y, sr = librosa.load(audio_path, sr=None)
+        return y, sr, librosa, np
+    except ImportError:
+        raise ImportError("librosa is required for audio feature extraction")
+
+def _normalize_to_range(value, min_val=0.0, max_val=1.0):
+    """Normalize a value to the specified range."""
+    return min(max(value, min_val), max_val)
+
+def _extract_features_opensmile(audio_path):
+    """Extract all audio features using OpenSMILE in one pass."""
+    try:
+        import opensmile
+        smile = opensmile.Smile(
+            feature_set=opensmile.FeatureSet.ComParE_2016,
+            feature_level=opensmile.FeatureLevel.Functionals,
+        )
+        features = smile.process_file(audio_path)
+        
+        # Extract different feature types in one pass
+        arousal_features = []
+        valence_features = []
+        
+        for col in features.columns:
+            col_lower = col.lower()
+            if any(keyword in col_lower for keyword in ['energy', 'loudness', 'intensity', 'rms']):
+                arousal_features.append(features[col].iloc[0])
+            if any(keyword in col_lower for keyword in ['mfcc', 'chroma', 'spectral_contrast']):
+                valence_features.append(features[col].iloc[0])
+        
+        arousal = None
+        valence = None
+        
+        if arousal_features:
+            arousal_raw = sum(arousal_features) / len(arousal_features)
+            arousal = _normalize_to_range(arousal_raw / 100.0)
+            
+        if valence_features:
+            valence_raw = sum(valence_features) / len(valence_features)
+            valence = _normalize_to_range((valence_raw + 50) / 100.0)
+            
+        return arousal, valence
+        
+    except ImportError:
+        return None, None
+
+def _get_pitch_thresholds():
+    """Get pitch thresholds from config with fallback values."""
+    try:
+        config = load_config_file()
+        pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
+        pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+        return pitch_min, pitch_max
+    except:
+        return 80, 400
 
 def analyze_audio_comprehensive(audio_path, video_id):
     """
@@ -83,9 +136,16 @@ def analyze_audio_comprehensive(audio_path, video_id):
                 'Pitch': None
             }
         
-        # Extract features using primary methods with fallbacks
-        arousal = extract_arousal(audio_path)
-        valence = extract_valence(audio_path)
+        # Try to extract arousal and valence together using OpenSMILE for efficiency
+        arousal, valence = _extract_features_opensmile(audio_path)
+        
+        # If OpenSMILE failed, fall back to individual extraction
+        if arousal is None:
+            arousal = extract_arousal(audio_path)
+        if valence is None:
+            valence = extract_valence(audio_path)
+            
+        # Extract pitch (always uses separate logic)
         pitch = extract_pitch_gpu(audio_path)
         
         return {
@@ -105,32 +165,12 @@ def extract_arousal(audio_path):
     """Extract arousal (energy/activation) normalized to 0-1."""
     try:
         # Try OpenSMILE first
-        try:
-            import opensmile
-            smile = opensmile.Smile(
-                feature_set=opensmile.FeatureSet.ComParE_2016,
-                feature_level=opensmile.FeatureLevel.Functionals,
-            )
-            features = smile.process_file(audio_path)
-            
-            # Extract arousal-related features
-            arousal_features = []
-            for col in features.columns:
-                if any(keyword in col.lower() for keyword in ['energy', 'loudness', 'intensity', 'rms']):
-                    arousal_features.append(features[col].iloc[0])
-            
-            if arousal_features:
-                arousal_raw = sum(arousal_features) / len(arousal_features)
-                # Normalize to 0-1 (assuming typical range)
-                return min(max(arousal_raw / 100.0, 0.0), 1.0)
-        except ImportError:
-            pass
+        arousal, _ = _extract_features_opensmile(audio_path)
+        if arousal is not None:
+            return arousal
         
         # Fallback to librosa
-        import librosa
-        import numpy as np
-        
-        y, sr = librosa.load(audio_path, sr=None)
+        y, sr, librosa, np = _load_audio_with_librosa(audio_path)
         
         # Combine multiple energy indicators
         rms_energy = librosa.feature.rms(y=y)[0]
@@ -144,7 +184,7 @@ def extract_arousal(audio_path):
         
         # Combine scores
         arousal = (energy_score + rolloff_score + tempo_score) / 3
-        return min(max(arousal, 0.0), 1.0)
+        return _normalize_to_range(arousal)
         
     except Exception as e:
         return None
@@ -153,32 +193,12 @@ def extract_valence(audio_path):
     """Extract valence (emotional positivity) normalized to 0-1."""
     try:
         # Try OpenSMILE first
-        try:
-            import opensmile
-            smile = opensmile.Smile(
-                feature_set=opensmile.FeatureSet.ComParE_2016,
-                feature_level=opensmile.FeatureLevel.Functionals,
-            )
-            features = smile.process_file(audio_path)
-            
-            # Extract valence-related features
-            valence_features = []
-            for col in features.columns:
-                if any(keyword in col.lower() for keyword in ['mfcc', 'chroma', 'spectral_contrast']):
-                    valence_features.append(features[col].iloc[0])
-            
-            if valence_features:
-                valence_raw = sum(valence_features) / len(valence_features)
-                # Normalize to 0-1
-                return min(max((valence_raw + 50) / 100.0, 0.0), 1.0)
-        except ImportError:
-            pass
+        _, valence = _extract_features_opensmile(audio_path)
+        if valence is not None:
+            return valence
         
         # Fallback to librosa
-        import librosa
-        import numpy as np
-        
-        y, sr = librosa.load(audio_path, sr=None)
+        y, sr, librosa, np = _load_audio_with_librosa(audio_path)
         
         # Extract valence indicators
         chroma = librosa.feature.chroma_stft(y=y, sr=sr)
@@ -192,7 +212,7 @@ def extract_valence(audio_path):
         
         # Combine indicators (higher values = more positive)
         valence = (chroma_mean * 2 + contrast_mean * 0.5 + abs(mfcc_brightness) * 0.1) / 3
-        return min(max(valence, 0.0), 1.0)
+        return _normalize_to_range(valence)
         
     except Exception as e:
         return None
@@ -207,12 +227,8 @@ def extract_pitch_gpu(audio_path):
             import numpy as np
             
             # Use existing device detection
-            try:
-                from core_functions import detect_optimal_whisper_settings
-                settings = detect_optimal_whisper_settings()
-                device = torch.device(settings["device"])
-            except:
-                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            settings = detect_optimal_whisper_settings()
+            device = torch.device(settings["device"])
             
             # Load audio with torchaudio
             waveform, sample_rate = torchaudio.load(audio_path)
@@ -230,10 +246,7 @@ def extract_pitch_gpu(audio_path):
             weighted_freq = torch.sum(magnitude * freq_bins.unsqueeze(1), dim=0) / torch.sum(magnitude, dim=0)
             
             # Get pitch thresholds from config
-            from utils import load_config_file
-            config = load_config_file()
-            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
-            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+            pitch_min, pitch_max = _get_pitch_thresholds()
             
             # Filter out very low and high frequencies (focus on speech range)
             speech_mask = (weighted_freq > pitch_min) & (weighted_freq < pitch_max)
@@ -241,16 +254,13 @@ def extract_pitch_gpu(audio_path):
                 mean_pitch = torch.mean(weighted_freq[speech_mask]).cpu().item()
                 # Normalize to 0-1 using configured speech range
                 normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)
-                return min(max(normalized_pitch, 0.0), 1.0)
+                return _normalize_to_range(normalized_pitch)
             
         except (ImportError, AttributeError):
             pass
         
         # Fallback to librosa
-        import librosa
-        import numpy as np
-        
-        y, sr = librosa.load(audio_path, sr=None)
+        y, sr, librosa, np = _load_audio_with_librosa(audio_path)
         
         # Extract fundamental frequency
         pitches, magnitudes = librosa.piptrack(y=y, sr=sr, threshold=0.1)
@@ -265,15 +275,12 @@ def extract_pitch_gpu(audio_path):
         
         if pitch_values:
             # Get pitch thresholds from config (fallback)
-            from utils import load_config_file
-            config = load_config_file()
-            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
-            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+            pitch_min, pitch_max = _get_pitch_thresholds()
             
             mean_pitch = np.mean(pitch_values)
             # Normalize to 0-1 using configured speech range
             normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)
-            return min(max(normalized_pitch, 0.0), 1.0)
+            return _normalize_to_range(normalized_pitch)
         
         return None
         
