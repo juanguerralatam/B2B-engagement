@@ -229,12 +229,18 @@ def extract_pitch_gpu(audio_path):
             freq_bins = torch.linspace(0, sample_rate/2, magnitude.shape[0], device=device)
             weighted_freq = torch.sum(magnitude * freq_bins.unsqueeze(1), dim=0) / torch.sum(magnitude, dim=0)
             
+            # Get pitch thresholds from config
+            from utils import load_config_file
+            config = load_config_file()
+            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
+            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+            
             # Filter out very low and high frequencies (focus on speech range)
-            speech_mask = (weighted_freq > 80) & (weighted_freq < 400)
+            speech_mask = (weighted_freq > pitch_min) & (weighted_freq < pitch_max)
             if torch.sum(speech_mask) > 0:
                 mean_pitch = torch.mean(weighted_freq[speech_mask]).cpu().item()
-                # Normalize to 0-1 using typical speech range (80-400 Hz)
-                normalized_pitch = (mean_pitch - 80) / (400 - 80)
+                # Normalize to 0-1 using configured speech range
+                normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)
                 return min(max(normalized_pitch, 0.0), 1.0)
             
         except (ImportError, AttributeError):
@@ -258,9 +264,15 @@ def extract_pitch_gpu(audio_path):
                 pitch_values.append(pitch)
         
         if pitch_values:
+            # Get pitch thresholds from config (fallback)
+            from utils import load_config_file
+            config = load_config_file()
+            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
+            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+            
             mean_pitch = np.mean(pitch_values)
-            # Normalize to 0-1 using typical speech range (80-400 Hz)
-            normalized_pitch = (mean_pitch - 80) / (400 - 80)
+            # Normalize to 0-1 using configured speech range
+            normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)
             return min(max(normalized_pitch, 0.0), 1.0)
         
         return None

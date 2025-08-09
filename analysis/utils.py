@@ -42,9 +42,29 @@ def ensure_directory_exists(directory_path: str) -> bool:
 def get_output_directory(subdir: str = None) -> str:
     """Get output directory path with optional subdirectory."""
     project_root = get_project_root()
+    config = load_config_file()
+    
     if subdir:
-        return os.path.join(project_root, "output", subdir)
-    return os.path.join(project_root, "output")
+        # Check if we have a specific config path for this subdirectory
+        config_key = f"{subdir}_dir"
+        if config.get("paths", {}).get(config_key):
+            path = config["paths"][config_key]
+            # Handle relative paths and home directory expansion
+            if path.startswith("~/"):
+                return os.path.expanduser(path)
+            elif not os.path.isabs(path):
+                return os.path.join(project_root, path)
+            else:
+                return path
+        else:
+            # Default fallback
+            return os.path.join(project_root, "output", subdir)
+    
+    # For base output directory
+    output_dir = config.get("paths", {}).get("output_dir", "output")
+    if not os.path.isabs(output_dir):
+        return os.path.join(project_root, output_dir)
+    return output_dir
 
 
 def find_file_in_locations(filename: str, locations: List[str]) -> Optional[str]:

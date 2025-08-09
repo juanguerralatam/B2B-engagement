@@ -25,23 +25,11 @@ except ImportError:
 
 def load_config() -> Dict:
     """Load configuration from config.json"""
-    config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'config.json')
-    try:
-        with open(config_path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print_status("Warning: config.json not found, using defaults", "WARNING")
-        return {
-            "paths": {
-                "input_dir": "input/",
-                "output_dir": "output/",
-                "video_dir": "output/video/",
-                "channels_file": "input/B2BcloudChannels.csv"
-            }
-        }
+    from utils import load_config_file
+    return load_config_file()
 
 def load_followers_data(config: Dict) -> Dict[str, int]:
-    """Load follower data from B2BcloudChannels.csv"""
+    """Load follower data from channels file"""
     channels_file = config['paths']['channels_file']
     
     if not os.path.exists(channels_file):
@@ -59,33 +47,23 @@ def load_followers_data(config: Dict) -> Dict[str, int]:
         return {}
 
 def load_video_metadata(config: Dict) -> Optional[pd.DataFrame]:
-    """Load video metadata from available CSV files"""
-    input_dir = config['paths']['input_dir']
-    output_dir = config['paths']['output_dir']
+    """Load video metadata from videos_statistics.csv file"""
     
-    # Try different possible filenames, prioritizing files with more metadata
-    possible_files = [
-        ('output', 'B2BcloudVideos.csv'),  # This has the most complete metadata
-        ('output', 'analysisYoutube.csv'),
-        ('input', 'downloadVideo.csv'),
-        ('input', 'description.csv')
-    ]
+    # Get the primary CSV file from config
+    csv_file = config.get("input_files", {}).get("primary_csv", "output/videos_statistics.csv")
     
-    for directory_name, filename in possible_files:
-        directory = output_dir if directory_name == 'output' else input_dir
-        filepath = os.path.join(directory, filename)
-        if os.path.exists(filepath):
-            try:
-                df = pd.read_csv(filepath)
-                print_status(f"Loaded video metadata from {directory_name}/{filename}", "SUCCESS")
-                print_status(f"Available columns: {list(df.columns)}", "INFO")
-                return df
-            except Exception as e:
-                print_status(f"Error reading {filepath}: {e}", "WARNING")
-                continue
+    if not os.path.exists(csv_file):
+        print_status(f"Video metadata file not found: {csv_file}", "ERROR")
+        return None
     
-    print_status("No video metadata file found", "ERROR")
-    return None
+    try:
+        df = pd.read_csv(csv_file)
+        print_status(f"Loaded video metadata from {csv_file}", "SUCCESS")
+        print_status(f"Available columns: {list(df.columns)}", "INFO")
+        return df
+    except Exception as e:
+        print_status(f"Error reading {csv_file}: {e}", "ERROR")
+        return None
 
 def calculate_video_age(upload_date_str: str) -> Optional[int]:
     """Calculate video age in days from upload date string"""
@@ -225,7 +203,15 @@ def extract_basic_features_from_data(config: Dict) -> bool:
     
     # Prepare output data
     output_data = []
-    video_dir = config['paths']['video_dir']
+    video_dir = os.path.expanduser(config['paths']['video_dir'])  # Expand ~ to home directory
+    
+    # Check for max_videos limit
+    max_videos = config.get('max_videos', None)
+    total_videos = len(video_metadata)
+    
+    if max_videos and max_videos < total_videos:
+        print_status(f"Limiting processing to first {max_videos} videos (out of {total_videos})", "INFO")
+        video_metadata = video_metadata.head(max_videos)
     
     print_status(f"Processing {len(video_metadata)} videos...", "INFO")
     
@@ -254,9 +240,41 @@ def extract_basic_features_from_data(config: Dict) -> bool:
             if duration_field:
                 video_length = parse_duration_to_seconds(str(duration_field))
             
-            # Analyze scenes
-            video_path = os.path.join(video_dir, f"{video_id}.mp4")
-            scene_analysis = simple_scene_analysis(video_path)
+            # Analyze scenes - handle different video file naming patterns
+            video_path = None
+            
+            # Try different file naming patterns
+            possible_patterns = [
+                f"{video_id}.mp4",  # Simple: videoId.mp4
+                f"{video_id} - *.mp4",  # Pattern: videoId - title.mp4
+            ]
+            
+            for pattern in possible_patterns:
+                if '*' in pattern:
+                    # Use glob to find files matching the pattern
+                    import glob
+                    matching_files = glob.glob(os.path.join(video_dir, pattern))
+                    if matching_files:
+                        video_path = matching_files[0]  # Take the first match
+                        break
+                else:
+                    # Direct file check
+                    test_path = os.path.join(video_dir, pattern)
+                    if os.path.exists(test_path):
+                        video_path = test_path
+                        break
+            
+            # If no video found, try a more thorough search
+            if not video_path:
+                import glob
+                # Search for any file that starts with the video ID
+                search_pattern = os.path.join(video_dir, f"{video_id}*")
+                matching_files = glob.glob(search_pattern)
+                video_files = [f for f in matching_files if f.endswith(('.mp4', '.mkv', '.webm', '.avi', '.mov'))]
+                if video_files:
+                    video_path = video_files[0]
+            
+            scene_analysis = simple_scene_analysis(video_path) if video_path else {"sceneNumber": None, "averageSceneLength": None}
             
             # Create output record
             record = {
@@ -280,7 +298,10 @@ def extract_basic_features_from_data(config: Dict) -> bool:
     
     # Save results
     if output_data:
-        output_file = os.path.join(config['paths']['output_dir'], 'basic_features.csv')
+        # Use output_files config if available, otherwise fallback to old method
+        output_file = config.get('output_files', {}).get('basic_features')
+        if not output_file:
+            output_file = os.path.join(config['paths']['output_dir'], 'basic_features.csv')
         ensure_directory_exists(os.path.dirname(output_file))
         
         output_df = pd.DataFrame(output_data)

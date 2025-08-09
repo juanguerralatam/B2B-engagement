@@ -2,12 +2,38 @@
   "paths": {
     "input_dir": "input/",
     "output_dir": "output/",
-    "video_dir": "output/video/",
+    "video_dir": "~/Downloads/youtube/",
     "audio_dir": "output/audio/",
     "text_dir": "output/text/",
     "json_dir": "output/json/",
-    "channels_file": "input/B2BcloudChannels.csv",
-    "download_file": "input/downloadVideo.csv"
+    "channels_file": "input/channels.csv",
+    "video_path": null,
+    "cookies_file": "youtube_cookies.txt",
+    "technical_vocabularies": "input/technical_vocabularies.json"
+  },
+  "output_files": {
+    "basic_features": "output/basic_features.csv",
+    "image_features": "output/image_features_analysis.csv",
+    "audio_features": "output/audio_features_analysis.csv",
+    "text_features": "output/text_features_analysis.csv",
+    "video_statistics": "output/videos_statistics.csv",
+    "main_output": "main.csv"
+  },
+  "input_files": {
+    "primary_csv": "output/videos_statistics.csv",
+    "channel_csv": "input/channels.csv"
+  },
+  "cookies": {
+    "search_locations": [
+      "youtube_cookies.txt",
+      "test/youtube_cookies.txt"
+    ]
+  },
+  "defaults": {
+    "model": "base",
+    "video_id": null,
+    "force": false,
+    "max_videos": 10
   },
   "thresholds": {
     "whisper_confidence": 0.8,

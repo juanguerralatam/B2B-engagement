@@ -48,22 +48,30 @@ def detect_optimal_whisper_settings():
 def download_video(video_url, video_id, output_dir=None):
     """Download video using yt-dlp with videoId as filename."""
     try:
+        from utils import load_config_file
+        config = load_config_file()
+        
         if output_dir is None:
             output_dir = get_output_directory("video")
         
         ensure_directory_exists(output_dir)
         output_path = os.path.join(output_dir, f"{video_id}.%(ext)s")
         
-        # Look for cookies file in multiple locations
-        cookies_files = [
-            "youtube_cookies.txt",
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube_cookies.txt"),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "youtube_cookies.txt"),
-            os.path.join("test", "youtube_cookies.txt")
+        # Get cookies file locations from config
+        cookies_locations = config.get("cookies", {}).get("search_locations", [])
+        
+        # Add dynamic locations relative to project
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dynamic_locations = [
+            os.path.join(project_root, loc) for loc in cookies_locations
         ]
+        dynamic_locations.extend([
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), config.get("paths", {}).get("cookies_file", "youtube_cookies.txt")),
+            os.path.join(project_root, config.get("paths", {}).get("cookies_file", "youtube_cookies.txt"))
+        ])
         
         cookies_path = None
-        for cookies_file in cookies_files:
+        for cookies_file in dynamic_locations:
             if os.path.exists(cookies_file):
                 cookies_path = cookies_file
                 break
@@ -85,7 +93,14 @@ def download_video(video_url, video_id, output_dir=None):
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
                 if result.returncode == 0:
-                    for ext in ['.mp4', '.mkv', '.webm', '.avi', '.mov']:
+                    # Get video format from config
+                    video_formats = config.get("output_formats", {}).get("video_format", "mp4")
+                    if isinstance(video_formats, str):
+                        video_formats = [video_formats]
+                    else:
+                        video_formats = ['.mp4', '.mkv', '.webm', '.avi', '.mov']
+                    
+                    for ext in [f'.{fmt}' if not fmt.startswith('.') else fmt for fmt in video_formats]:
                         test_path = os.path.join(output_dir, f"{video_id}{ext}")
                         if os.path.exists(test_path):
                             return test_path
@@ -158,7 +173,7 @@ def process_single_video(video_id, video_path, args):
             with open(transcript_path, 'w', encoding='utf-8') as f:
                 f.write(transcript)
         
-        if args.narration:
+        if args.narration_only:
             try:
                 evaluation = evaluate_narration_quality(transcript, None)
                 if evaluation:
@@ -171,10 +186,17 @@ def process_single_video(video_id, video_path, args):
         print("Failed to generate transcript")
         return False
 
-# Data operations for scene analysis
-def save_scene_analysis(video_id, scene_results, csv_file="analysisYoutube.csv"):
-    """Save scene analysis results to CSV file."""
+# Data operations for scene analysis - integrate into basic features
+def save_scene_analysis(video_id, scene_results, csv_file=None):
+    """Save scene analysis results integrated into basic features CSV file."""
     try:
+        from utils import load_config_file
+        config = load_config_file()
+        
+        # Use basic_features file instead of separate scene analysis file
+        if csv_file is None:
+            csv_file = config.get("output_files", {}).get("basic_features", "output/basic_features.csv")
+        
         if isinstance(scene_results, (int, float)):
             scene_data = {'scene_count': scene_results, 'average_scene_length': 0, 'total_duration': 0}
         elif isinstance(scene_results, dict):
@@ -182,35 +204,51 @@ def save_scene_analysis(video_id, scene_results, csv_file="analysisYoutube.csv")
         else:
             return False
         
-        csv_path = os.path.join(get_output_directory(), csv_file)
+        csv_path = csv_file if os.path.isabs(csv_file) else os.path.join(get_output_directory(), os.path.basename(csv_file))
         
         # Read existing data
         existing_data = {}
         if os.path.exists(csv_path):
             data_list = read_csv_safe(csv_path)
             for row in data_list:
-                existing_data[row['videoId']] = row
+                existing_data[row.get('videoId', '')] = row
         
-        # Update with new data
-        existing_data[video_id] = {
-            'videoId': video_id,
-            'scene_count': scene_data['scene_count'],
-            'average_scene_length': scene_data.get('average_scene_length', 0) if scene_data['scene_count'] > 0 else '',
-            'total_duration': scene_data.get('total_duration', 0) if scene_data['scene_count'] > 0 else '',
-            'analysis_date': get_timestamp()
-        }
+        # Update existing row with scene data or create new entry
+        if video_id in existing_data:
+            existing_data[video_id].update({
+                'sceneNumber': scene_data['scene_count'],
+                'averageSceneLength': scene_data.get('average_scene_length', 0) if scene_data['scene_count'] > 0 else '',
+                'analysis_date': get_timestamp()
+            })
+        else:
+            # Create minimal entry if video not in basic features yet
+            existing_data[video_id] = {
+                'videoId': video_id,
+                'sceneNumber': scene_data['scene_count'],
+                'averageSceneLength': scene_data.get('average_scene_length', 0) if scene_data['scene_count'] > 0 else '',
+                'analysis_date': get_timestamp()
+            }
         
-        # Write updated data
-        fieldnames = ['videoId', 'scene_count', 'average_scene_length', 'total_duration', 'analysis_date']
-        return write_csv_safe(list(existing_data.values()), csv_path, fieldnames)
+        # Write updated data with proper fieldnames
+        all_possible_fields = ['videoId', 'channelId', 'Followers', 'videoAge', 'videoLength', 
+                              'sceneNumber', 'averageSceneLength', 'analysis_date']
+        return write_csv_safe(list(existing_data.values()), csv_path, all_possible_fields)
         
     except Exception as e:
+        print_status(f"Error saving scene analysis: {e}", "ERROR")
         return False
 
-def read_scene_analysis(csv_file="analysisYoutube.csv"):
-    """Read existing scene analysis results from CSV."""
+def read_scene_analysis(csv_file=None):
+    """Read existing scene analysis results from basic features CSV."""
     try:
-        csv_path = os.path.join(get_output_directory(), csv_file)
+        from utils import load_config_file
+        config = load_config_file()
+        
+        # Read from basic_features file instead of separate scene analysis file
+        if csv_file is None:
+            csv_file = config.get("output_files", {}).get("basic_features", "output/basic_features.csv")
+        
+        csv_path = csv_file if os.path.isabs(csv_file) else os.path.join(get_output_directory(), os.path.basename(csv_file))
         
         if not os.path.exists(csv_path):
             return {}
@@ -220,12 +258,13 @@ def read_scene_analysis(csv_file="analysisYoutube.csv"):
         
         for row in data_list:
             try:
-                scene_data[row['videoId']] = {
-                    'scene_count': int(row['scene_count']),
-                    'average_scene_length': float(row['average_scene_length']) if row['average_scene_length'] else 0,
-                    'total_duration': float(row['total_duration']) if row['total_duration'] else 0,
-                    'analysis_date': row.get('analysis_date', '')
-                }
+                video_id = row.get('videoId')
+                if video_id and row.get('sceneNumber'):
+                    scene_data[video_id] = {
+                        'scene_count': int(row.get('sceneNumber', 0)),
+                        'average_scene_length': float(row.get('averageSceneLength', 0)) if row.get('averageSceneLength') else 0,
+                        'analysis_date': row.get('analysis_date', '')
+                    }
             except (ValueError, KeyError):
                 continue
         
@@ -234,41 +273,51 @@ def read_scene_analysis(csv_file="analysisYoutube.csv"):
     except Exception as e:
         return {}
 
-# Data operations for gender analysis  
-def save_gender_analysis(video_id, gender_results, csv_file="genderAnalysis.csv"):
-    """Save gender analysis results to CSV file."""
+# Data operations for gender analysis - integrate into image features
+def save_gender_analysis(video_id, gender_results, csv_file=None):
+    """Save gender analysis results integrated into image features CSV file."""
     try:
+        from utils import load_config_file
+        config = load_config_file()
+        
         if not gender_results:
             return False
         
-        csv_path = os.path.join(get_output_directory(), csv_file)
+        # Use image_features file instead of separate gender analysis file
+        if csv_file is None:
+            csv_file = config.get("output_files", {}).get("image_features", "output/image_features_analysis.csv")
+        
+        csv_path = csv_file if os.path.isabs(csv_file) else os.path.join(get_output_directory(), os.path.basename(csv_file))
         
         # Read existing data
         existing_data = {}
         if os.path.exists(csv_path):
             data_list = read_csv_safe(csv_path)
             for row in data_list:
-                existing_data[row['videoId']] = row
+                existing_data[row.get('VideoId', '')] = row
         
-        # Update with new data
-        existing_data[video_id] = {
-            'videoId': video_id,
-            'gender': gender_results['gender'],
-            'score': gender_results.get('score', ''),
-            'confidence': gender_results['confidence'],
-            'male_detections': gender_results.get('male_detections', 0),
-            'female_detections': gender_results.get('female_detections', 0),
-            'faces_detected': gender_results['faces_detected'],
-            'frames_analyzed': gender_results['frames_analyzed'],
-            'analysis_date': get_timestamp()
-        }
+        # Update existing row with gender data or create new entry
+        if video_id in existing_data:
+            existing_data[video_id].update({
+                'Gender': gender_results.get('score', ''),
+                'analysis_date': get_timestamp()
+            })
+        else:
+            # Create minimal entry if video not in image features yet
+            existing_data[video_id] = {
+                'VideoId': video_id,
+                'Gender': gender_results.get('score', ''),
+                'analysis_date': get_timestamp()
+            }
         
-        # Write updated data
-        fieldnames = ['videoId', 'gender', 'score', 'confidence', 'male_detections', 
-                     'female_detections', 'faces_detected', 'frames_analyzed', 'analysis_date']
-        return write_csv_safe(list(existing_data.values()), csv_path, fieldnames)
+        # Write updated data with proper fieldnames for image features
+        all_possible_fields = ['VideoId', 'humanPresence', 'faceSum', 'Gender', 'Smile', 
+                              'motionMagnitude', 'motionDirection', 'Saturation', 'Brightness', 
+                              'frames_analyzed', 'analysis_date']
+        return write_csv_safe(list(existing_data.values()), csv_path, all_possible_fields)
         
     except Exception as e:
+        print_status(f"Error saving gender analysis: {e}", "ERROR")
         return False
         
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
@@ -285,10 +334,17 @@ def save_gender_analysis(video_id, gender_results, csv_file="genderAnalysis.csv"
     except Exception as e:
         return False
 
-def read_gender_analysis(csv_file="genderAnalysis.csv"):
-    """Read existing gender analysis results from CSV."""
+def read_gender_analysis(csv_file=None):
+    """Read existing gender analysis results from image features CSV."""
     try:
-        csv_path = os.path.join(get_output_directory(), csv_file)
+        from utils import load_config_file
+        config = load_config_file()
+        
+        # Read from image_features file instead of separate gender analysis file
+        if csv_file is None:
+            csv_file = config.get("output_files", {}).get("image_features", "output/image_features_analysis.csv")
+        
+        csv_path = csv_file if os.path.isabs(csv_file) else os.path.join(get_output_directory(), os.path.basename(csv_file))
         
         if not os.path.exists(csv_path):
             return {}
@@ -298,25 +354,17 @@ def read_gender_analysis(csv_file="genderAnalysis.csv"):
         
         for row in data_list:
             try:
-                # Handle both old and new CSV formats
-                gender = row.get('gender', row.get('predicted_gender', 'unknown'))
-                confidence = float(row.get('confidence', 0))
-                
-                gender_data[row['videoId']] = {
-                    'gender': gender,
-                    'score': row.get('score', ''),
-                    'confidence': confidence,
-                    'male_detections': int(row.get('male_detections', 0)),
-                    'female_detections': int(row.get('female_detections', 0)),
-                    'faces_detected': int(row['faces_detected']),
-                    'frames_analyzed': int(row['frames_analyzed']),
-                    'analysis_date': row.get('analysis_date', '')
-                }
+                video_id = row.get('VideoId')
+                if video_id and row.get('Gender') is not None:
+                    gender_data[video_id] = {
+                        'gender': 'male' if float(row.get('Gender', 0.5)) < 0.5 else 'female',
+                        'score': row.get('Gender', ''),
+                        'analysis_date': row.get('analysis_date', '')
+                    }
             except (ValueError, KeyError):
                 continue
         
         return gender_data
         
     except Exception as e:
-        return {}
         return {}

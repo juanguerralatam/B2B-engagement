@@ -5,14 +5,18 @@ import googleapiclient.discovery
 import isodate
 from utils import (
     read_channel_ids_from_csv, write_csv_safe, print_status, 
-    print_progress, validate_video_id
+    print_progress, validate_video_id, load_config_file
 )
 
 # Get API key from environment variable or default
 API_KEY = os.getenv('YOUTUBE_API_KEY', "AIzaSyAElw-2HxeBlTQAdbn647_dIP0rAF5u-d8")
+
+# Load config for file paths
+config = load_config_file()
 MAX_RESULTS = None  # Set to None to retrieve all videos
-CSV_FILENAME = "all_channels_videos.csv"
-CHANNEL_CSV = "channel.csv"
+# Use main video_statistics file instead of separate all_channels_videos
+CSV_FILENAME = config.get("output_files", {}).get("video_statistics", "output/videos_statistics.csv")
+CHANNEL_CSV = config.get("input_files", {}).get("channel_csv", "input/channels.csv")
 
 def get_youtube_service():
     try:

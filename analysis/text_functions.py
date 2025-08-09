@@ -18,15 +18,31 @@ from utils import (
 
 # Import technical vocabularies from external file
 import sys
+import json
 # Add the project root to the path to import from input folder
 project_root = get_project_root()
 sys.path.insert(0, os.path.join(project_root, 'input'))
 
 try:
-    from technical_vocabularies import TECHNICAL_VOCABULARIES
-except ImportError:
+    # Load config to get vocabulary file path
+    from utils import load_config_file
+    config = load_config_file()
+    vocab_file = config.get("paths", {}).get("technical_vocabularies", "input/technical_vocabularies.json")
+    
+    # Make absolute path if relative
+    if not os.path.isabs(vocab_file):
+        vocab_file = os.path.join(project_root, vocab_file)
+    
+    if os.path.exists(vocab_file):
+        with open(vocab_file, 'r') as f:
+            TECHNICAL_VOCABULARIES = json.load(f)
+        print_status("Loaded technical vocabularies from JSON file", "SUCCESS")
+    else:
+        # Try to import from Python module as fallback
+        from technical_vocabularies import TECHNICAL_VOCABULARIES
+except (ImportError, FileNotFoundError, json.JSONDecodeError) as e:
     # Fallback if import fails
-    print_status("Warning: Could not import technical vocabularies, using default", "WARNING")
+    print_status(f"Warning: Could not load technical vocabularies ({e}), using default", "WARNING")
     TECHNICAL_VOCABULARIES = {
         'cloud_infrastructure': {
             'aws': ['ec2', 'lambda', 's3', 'vpc', 'cloudformation'],
