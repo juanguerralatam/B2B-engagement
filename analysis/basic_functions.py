@@ -276,6 +276,22 @@ def extract_basic_features_from_data(config: Dict) -> bool:
             
             scene_analysis = simple_scene_analysis(video_path) if video_path else {"sceneNumber": None, "averageSceneLength": None}
             
+            # Extract video dimensions and format
+            video_dimensions = None
+            video_format = None
+            video_orientation = None
+            
+            if video_path:
+                try:
+                    from utils import get_video_dimensions
+                    dims = get_video_dimensions(video_path)
+                    if dims:
+                        video_format = dims['format']
+                        video_orientation = dims['orientation']
+                        video_dimensions = dims
+                except Exception as e:
+                    print_status(f"Could not extract video dimensions for {video_id}: {e}", "WARNING")
+            
             # Create output record
             record = {
                 'channelId': channel_id,
@@ -284,7 +300,9 @@ def extract_basic_features_from_data(config: Dict) -> bool:
                 'videoAge': video_age,
                 'videoLength': video_length,
                 'sceneNumber': scene_analysis['sceneNumber'],
-                'averageSceneLength': scene_analysis['averageSceneLength']
+                'averageSceneLength': scene_analysis['averageSceneLength'],
+                'format': video_format,
+                'orientation': video_orientation
             }
             
             output_data.append(record)
@@ -308,7 +326,7 @@ def extract_basic_features_from_data(config: Dict) -> bool:
         output_df.to_csv(output_file, index=False)
         
         print_status(f"Saved {len(output_data)} records to {output_file}", "SUCCESS")
-        print_status(f"Features extracted: channelId, videoId, Followers, videoAge, videoLength, sceneNumber, averageSceneLength", "INFO")
+        print_status(f"Features extracted: channelId, videoId, Followers, videoAge, videoLength, sceneNumber, averageSceneLength, format, orientation", "INFO")
         return True
     else:
         print_status("No data to save", "ERROR")

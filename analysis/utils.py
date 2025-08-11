@@ -452,3 +452,66 @@ def save_config_file(config: Dict[str, Any], config_path: str = None) -> bool:
         config_path = os.path.join(get_project_root(), 'config.json')
     
     return save_json_file(config, config_path)
+
+
+# =============================================================================
+# Video Analysis Utilities
+# =============================================================================
+
+def get_video_dimensions(video_path: str) -> Optional[Dict[str, Any]]:
+    """
+    Extract video dimensions and format information.
+    
+    Args:
+        video_path: Path to the video file
+        
+    Returns:
+        Dict with keys: width, height, format, orientation
+        format: "WidthxHeight" (e.g., "1920x1080")
+        orientation: "horizontal", "vertical", or "square"
+    """
+    if not os.path.exists(video_path):
+        return None
+    
+    try:
+        import cv2
+        
+        # Open video capture
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return None
+        
+        # Get video dimensions
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Release the capture
+        cap.release()
+        
+        if width == 0 or height == 0:
+            return None
+        
+        # Determine orientation
+        if width > height:
+            orientation = "horizontal"
+        elif height > width:
+            orientation = "vertical"
+        else:
+            orientation = "square"
+        
+        # Create format string
+        format_str = f"{width}x{height}"
+        
+        return {
+            "width": width,
+            "height": height,
+            "format": format_str,
+            "orientation": orientation
+        }
+        
+    except ImportError:
+        print_status("OpenCV not available for video dimension extraction", "WARNING")
+        return None
+    except Exception as e:
+        print_status(f"Error extracting video dimensions from {video_path}: {e}", "WARNING")
+        return None
