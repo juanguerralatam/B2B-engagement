@@ -13,20 +13,30 @@ from typing import Dict, Optional, List
 
 # Import utilities
 try:
-    from utils import ensure_directory_exists, print_status
+    from .utils.core import ensure_directory_exists, print_status, get_shared_config, get_video_dimensions
 except ImportError:
-    def ensure_directory_exists(path):
-        os.makedirs(path, exist_ok=True)
-    
-    def print_status(message, level="INFO"):
-        levels = {"INFO": "", "WARNING": "⚠️ ", "ERROR": "❌ ", "SUCCESS": "✅ "}
-        prefix = levels.get(level.upper(), "")
-        print(f"{prefix}{message}")
+    # Fallback for direct execution
+    try:
+        from utils.core import ensure_directory_exists, print_status, get_shared_config, get_video_dimensions
+    except ImportError:
+        def ensure_directory_exists(path):
+            os.makedirs(path, exist_ok=True)
+        
+        def print_status(message, level="INFO"):
+            levels = {"INFO": "", "WARNING": "⚠️ ", "ERROR": "❌ ", "SUCCESS": "✅ "}
+            prefix = levels.get(level.upper(), "")
+            print(f"{prefix}{message}")
+        
+        def get_shared_config():
+            return {}
+        
+        def get_video_dimensions(video_path):
+            return None
 
 def load_config() -> Dict:
     """Load configuration from config.json"""
-    from utils import load_config_file
-    return load_config_file()
+    from .utils.core import get_shared_config
+    return get_shared_config()
 
 def load_followers_data(config: Dict) -> Dict[str, int]:
     """Load follower data from channels file"""
@@ -139,7 +149,7 @@ def simple_scene_analysis(video_path: str) -> Dict[str, Optional[float]]:
     
     try:
         # Try to import and use scene detection
-        from image_functions import detect_scenes
+        from .image_functions import detect_scenes
         
         # Extract video_id from path
         video_id = os.path.basename(video_path).replace('.mp4', '')
@@ -206,7 +216,7 @@ def extract_basic_features_from_data(config: Dict) -> bool:
     video_dir = os.path.expanduser(config['paths']['video_dir'])  # Expand ~ to home directory
     
     # Check for max_videos limit
-    max_videos = config.get('max_videos', None)
+    max_videos = config.get('defaults', {}).get('max_videos', None)
     total_videos = len(video_metadata)
     
     if max_videos and max_videos < total_videos:
@@ -283,7 +293,6 @@ def extract_basic_features_from_data(config: Dict) -> bool:
             
             if video_path:
                 try:
-                    from utils import get_video_dimensions
                     dims = get_video_dimensions(video_path)
                     if dims:
                         video_format = dims['format']

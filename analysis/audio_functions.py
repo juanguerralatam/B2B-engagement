@@ -45,7 +45,7 @@ def transcribe_audio(audio_path, model_size="base", device=None, fp16=None):
         # Force GPU settings if not provided
         if device is None or fp16 is None:
             try:
-                from core_functions import detect_optimal_whisper_settings
+                from .utils import detect_optimal_whisper_settings
                 settings = detect_optimal_whisper_settings()
                 device = settings["device"]
                 fp16 = settings["fp16"]
@@ -200,6 +200,12 @@ def extract_valence(audio_path):
 def extract_pitch_gpu(audio_path):
     """Extract pitch (fundamental frequency) with GPU acceleration, normalized to 0-1."""
     try:
+        # Get pitch thresholds from config first
+        from .utils.core import get_shared_config
+        config = get_shared_config()
+        pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
+        pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+        
         # Try GPU-accelerated approach first
         try:
             import torch
@@ -208,7 +214,7 @@ def extract_pitch_gpu(audio_path):
             
             # Use existing device detection
             try:
-                from core_functions import detect_optimal_whisper_settings
+                from .utils.core import detect_optimal_whisper_settings
                 settings = detect_optimal_whisper_settings()
                 device = torch.device(settings["device"])
             except:
@@ -218,32 +224,34 @@ def extract_pitch_gpu(audio_path):
             waveform, sample_rate = torchaudio.load(audio_path)
             waveform = waveform.to(device)
             
-            # Extract pitch using torchaudio transforms
-            pitch_transform = torchaudio.transforms.PitchShift(sample_rate, n_steps=0).to(device)
-            
-            # Use a simpler approach - spectral analysis for pitch
-            stft = torch.stft(waveform.squeeze(), n_fft=2048, hop_length=512, return_complex=True)
+            # Use STFT for pitch detection with window
+            window = torch.hann_window(2048).to(device)
+            stft = torch.stft(waveform.squeeze(), n_fft=2048, hop_length=512, 
+                            window=window, return_complex=True)
             magnitude = torch.abs(stft)
             
-            # Find dominant frequency (pitch proxy)
+            # Calculate frequency bins
             freq_bins = torch.linspace(0, sample_rate/2, magnitude.shape[0], device=device)
-            weighted_freq = torch.sum(magnitude * freq_bins.unsqueeze(1), dim=0) / torch.sum(magnitude, dim=0)
             
-            # Get pitch thresholds from config
-            from utils import load_config_file
-            config = load_config_file()
-            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
-            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+            # Find peak frequency for each time frame
+            peak_freqs = []
+            for t in range(magnitude.shape[1]):
+                # Find the frequency bin with maximum magnitude
+                max_idx = torch.argmax(magnitude[:, t])
+                peak_freq = freq_bins[max_idx].cpu().item()
+                
+                # Only consider frequencies in the human speech range
+                if pitch_min <= peak_freq <= pitch_max:
+                    peak_freqs.append(peak_freq)
             
-            # Filter out very low and high frequencies (focus on speech range)
-            speech_mask = (weighted_freq > pitch_min) & (weighted_freq < pitch_max)
-            if torch.sum(speech_mask) > 0:
-                mean_pitch = torch.mean(weighted_freq[speech_mask]).cpu().item()
+            if peak_freqs:
+                mean_pitch = np.mean(peak_freqs)
                 # Normalize to 0-1 using configured speech range
                 normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)
                 return min(max(normalized_pitch, 0.0), 1.0)
             
-        except (ImportError, AttributeError):
+        except (ImportError, AttributeError, Exception) as e:
+            # Fall through to librosa method
             pass
         
         # Fallback to librosa
@@ -252,24 +260,61 @@ def extract_pitch_gpu(audio_path):
         
         y, sr = librosa.load(audio_path, sr=None)
         
-        # Extract fundamental frequency
-        pitches, magnitudes = librosa.piptrack(y=y, sr=sr, threshold=0.1)
-        
-        # Get pitch values where magnitude is highest
+        # Use multiple methods for better pitch detection
         pitch_values = []
+        
+        # Method 1: piptrack (traditional)
+        pitches, magnitudes = librosa.piptrack(y=y, sr=sr, threshold=0.1)
         for t in range(pitches.shape[1]):
             index = magnitudes[:, t].argmax()
             pitch = pitches[index, t]
-            if pitch > 0:
+            if pitch_min <= pitch <= pitch_max:
                 pitch_values.append(pitch)
         
-        if pitch_values:
-            # Get pitch thresholds from config (fallback)
-            from utils import load_config_file
-            config = load_config_file()
-            pitch_min = config.get("thresholds", {}).get("pitch_min", 80)
-            pitch_max = config.get("thresholds", {}).get("pitch_max", 400)
+        # Method 2: Use autocorrelation for fundamental frequency
+        try:
+            # Autocorrelation method
+            autocorr = np.correlate(y, y, mode='full')
+            autocorr = autocorr[autocorr.size // 2:]
             
+            # Find peaks in autocorrelation
+            from scipy.signal import find_peaks
+            peaks, _ = find_peaks(autocorr[1:], height=0.3 * np.max(autocorr))
+            
+            if len(peaks) > 0:
+                # Convert lag to frequency
+                fundamental_period = peaks[0] + 1  # +1 because we started from index 1
+                fundamental_freq = sr / fundamental_period
+                if pitch_min <= fundamental_freq <= pitch_max:
+                    pitch_values.append(fundamental_freq)
+        except:
+            pass
+        
+        # Method 3: Use FFT to find dominant frequency
+        try:
+            # Take FFT of the signal
+            fft = np.fft.fft(y)
+            magnitude = np.abs(fft)
+            freqs = np.fft.fftfreq(len(fft), 1/sr)
+            
+            # Only consider positive frequencies in speech range
+            positive_freqs = freqs[:len(freqs)//2]
+            positive_magnitude = magnitude[:len(magnitude)//2]
+            
+            # Find peaks in the speech range
+            speech_mask = (positive_freqs >= pitch_min) & (positive_freqs <= pitch_max)
+            if np.any(speech_mask):
+                speech_freqs = positive_freqs[speech_mask]
+                speech_magnitudes = positive_magnitude[speech_mask]
+                
+                # Find the frequency with maximum magnitude
+                max_idx = np.argmax(speech_magnitudes)
+                dominant_freq = speech_freqs[max_idx]
+                pitch_values.append(dominant_freq)
+        except:
+            pass
+        
+        if pitch_values:
             mean_pitch = np.mean(pitch_values)
             # Normalize to 0-1 using configured speech range
             normalized_pitch = (mean_pitch - pitch_min) / (pitch_max - pitch_min)

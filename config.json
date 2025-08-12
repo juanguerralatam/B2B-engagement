@@ -33,7 +33,7 @@
     "model": "base",
     "video_id": null,
     "force": false,
-    "max_videos": 10
+    "max_videos": 5
   },
   "thresholds": {
     "whisper_confidence": 0.8,

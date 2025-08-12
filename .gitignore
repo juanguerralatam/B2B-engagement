@@ -27,6 +27,8 @@ output/audio/
 output/video/
 output/text/
 output/json/
+models/
+
 
 # API keys and sensitive data
 *.txt

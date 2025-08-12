@@ -7,49 +7,17 @@ Main processing logic and data operations
 import os
 import csv
 import subprocess
-from utils import (
+from .utils.core import (
     detect_optimal_device_settings, read_csv_safe, write_csv_safe,
     get_output_directory, ensure_directory_exists, print_status,
-    get_timestamp, validate_video_id
+    get_timestamp, validate_video_id, detect_optimal_whisper_settings
 )
-
-def detect_optimal_whisper_settings():
-    """Detect optimal Whisper settings based on available hardware."""
-    try:
-        # Check for whisper import
-        try:
-            import whisper
-        except ImportError:
-            pass
-        
-        # Use utils function for device detection
-        device_settings = detect_optimal_device_settings()
-        
-        # Determine recommended model based on memory
-        memory_gb = device_settings['memory_gb']
-        if device_settings['gpu_available'] and memory_gb >= 16:
-            recommended_model = "large"
-        elif memory_gb >= 8:
-            recommended_model = "medium"
-        else:
-            recommended_model = "base"
-        
-        return {
-            "device": device_settings['device'],
-            "recommended_model": recommended_model,
-            "fp16": device_settings['fp16_enabled']
-        }
-        
-    except ImportError as e:
-        return {"device": "cpu", "recommended_model": "base", "fp16": False}
-    except Exception as e:
-        return {"device": "cpu", "recommended_model": "base", "fp16": False}
 
 def download_video(video_url, video_id, output_dir=None):
     """Download video using yt-dlp with videoId as filename."""
     try:
-        from utils import load_config_file
-        config = load_config_file()
+        from .utils.core import get_shared_config
+        config = get_shared_config()
         
         if output_dir is None:
             output_dir = get_output_directory("video")
@@ -120,8 +88,8 @@ def process_single_video(video_id, video_path, args):
     """Process a single video for transcription and evaluation."""
     # Import here to avoid circular imports
     try:
-        from audio_functions import extract_audio, transcribe_audio
-        from text_functions import evaluate_narration_quality, save_evaluation_report
+        from .audio_functions import extract_audio, transcribe_audio
+        from .text_functions import evaluate_narration_quality, save_evaluation_report
     except ImportError as e:
         print_status(f"Error importing required modules: {e}", "ERROR")
         return False
@@ -190,8 +158,8 @@ def process_single_video(video_id, video_path, args):
 def save_scene_analysis(video_id, scene_results, csv_file=None):
     """Save scene analysis results integrated into basic features CSV file."""
     try:
-        from utils import load_config_file
-        config = load_config_file()
+        from .utils.core import get_shared_config
+        config = get_shared_config()
         
         # Use basic_features file instead of separate scene analysis file
         if csv_file is None:
@@ -241,8 +209,8 @@ def save_scene_analysis(video_id, scene_results, csv_file=None):
 def read_scene_analysis(csv_file=None):
     """Read existing scene analysis results from basic features CSV."""
     try:
-        from utils import load_config_file
-        config = load_config_file()
+        from .utils.core import get_shared_config
+        config = get_shared_config()
         
         # Read from basic_features file instead of separate scene analysis file
         if csv_file is None:
@@ -277,8 +245,8 @@ def read_scene_analysis(csv_file=None):
 def save_gender_analysis(video_id, gender_results, csv_file=None):
     """Save gender analysis results integrated into image features CSV file."""
     try:
-        from utils import load_config_file
-        config = load_config_file()
+        from .utils.core import get_shared_config
+        config = get_shared_config()
         
         if not gender_results:
             return False
@@ -337,8 +305,8 @@ def save_gender_analysis(video_id, gender_results, csv_file=None):
 def read_gender_analysis(csv_file=None):
     """Read existing gender analysis results from image features CSV."""
     try:
-        from utils import load_config_file
-        config = load_config_file()
+        from .utils.core import get_shared_config
+        config = get_shared_config()
         
         # Read from image_features file instead of separate gender analysis file
         if csv_file is None:
@@ -368,3 +336,211 @@ def read_gender_analysis(csv_file=None):
         
     except Exception as e:
         return {}
+
+# =============================================================================
+# Video Analysis Orchestration Functions
+# =============================================================================
+
+def analyze_video_complete(video_path, video_id, config=None):
+    """Complete video analysis orchestrator - all features."""
+    if config is None:
+        from .utils.core import get_shared_config
+        config = get_shared_config()
+    
+    results = {
+        'video_id': video_id,
+        'video_path': video_path,
+        'timestamp': get_timestamp()
+    }
+    
+    print_status(f"Starting complete analysis for {video_id}", "INFO")
+    
+    # Basic features analysis
+    try:
+        print_status("Extracting basic features...", "INFO")
+        results['basic'] = analyze_basic_only(video_path, video_id)
+        print_status("Basic features completed", "SUCCESS")
+    except Exception as e:
+        print_status(f"Basic features failed: {e}", "ERROR")
+        results['basic'] = None
+    
+    # Image analysis
+    try:
+        from .image_functions import analyze_video_comprehensive
+        print_status("Analyzing video content...", "INFO")
+        results['image'] = analyze_video_comprehensive(video_path, video_id)
+        print_status("Image analysis completed", "SUCCESS")
+    except Exception as e:
+        print_status(f"Image analysis failed: {e}", "ERROR")
+        results['image'] = None
+    
+    # Audio analysis (if audio file exists)
+    try:
+        from .audio_functions import analyze_audio_comprehensive
+        audio_dir = get_output_directory("audio")
+        audio_path = os.path.join(audio_dir, f"{video_id}.wav")
+        
+        if os.path.exists(audio_path):
+            print_status("Analyzing audio features...", "INFO")
+            results['audio'] = analyze_audio_comprehensive(audio_path, video_id)
+            print_status("Audio analysis completed", "SUCCESS")
+        else:
+            print_status(f"Audio file not found: {audio_path}", "WARNING")
+            results['audio'] = None
+    except Exception as e:
+        print_status(f"Audio analysis failed: {e}", "ERROR")
+        results['audio'] = None
+    
+    # Text analysis (if transcript exists)
+    try:
+        from .text_functions import analyze_text_comprehensive
+        transcript_dir = get_output_directory("text")
+        transcript_path = os.path.join(transcript_dir, f"{video_id}.txt")
+        
+        if os.path.exists(transcript_path):
+            print_status("Analyzing text features...", "INFO")
+            # Get title and description from video metadata if available
+            title = ""  # Could be extracted from metadata
+            description = ""  # Could be extracted from metadata
+            results['text'] = analyze_text_comprehensive(video_id, title, description, transcript_path)
+            print_status("Text analysis completed", "SUCCESS")
+        else:
+            print_status(f"Transcript file not found: {transcript_path}", "WARNING")
+            results['text'] = None
+    except Exception as e:
+        print_status(f"Text analysis failed: {e}", "ERROR")
+        results['text'] = None
+    
+    print_status(f"Complete analysis finished for {video_id}", "SUCCESS")
+    return results
+
+def analyze_basic_only(video_path, video_id):
+    """Quick basic analysis workflow for a single video."""
+    from .utils.core import get_shared_config
+    config = get_shared_config()
+    
+    try:
+        from .basic_functions import simple_scene_analysis, calculate_video_age, parse_duration_to_seconds
+        from .utils.core import get_video_dimensions
+        import pandas as pd
+        import os
+        
+        print_status(f"Analyzing basic features for {video_id}", "INFO")
+        
+        # Load video metadata to get video info
+        csv_file = config.get("input_files", {}).get("primary_csv", "output/videos_statistics.csv")
+        if not os.path.exists(csv_file):
+            print_status(f"Video metadata file not found: {csv_file}", "ERROR")
+            return None
+        
+        # Read metadata for this specific video
+        df = pd.read_csv(csv_file)
+        video_row = df[df['videoId'] == video_id]
+        
+        if video_row.empty:
+            print_status(f"Video {video_id} not found in metadata", "WARNING")
+            return {
+                'videoId': video_id,
+                'channelId': None,
+                'Followers': None,
+                'videoAge': None,
+                'videoLength': None,
+                'sceneNumber': None,
+                'averageSceneLength': None,
+                'format': None,
+                'orientation': None
+            }
+        
+        row = video_row.iloc[0]
+        
+        # Load followers data
+        followers_map = {}
+        channels_file = config.get('paths', {}).get('channels_file', 'input/channels.csv')
+        if os.path.exists(channels_file):
+            try:
+                channels_df = pd.read_csv(channels_file)
+                followers_map = dict(zip(channels_df['id'], channels_df['Followers']))
+            except Exception as e:
+                print_status(f"Error loading followers data: {e}", "WARNING")
+        
+        # Extract basic info
+        channel_id = row.get('channelId', '')
+        followers = followers_map.get(channel_id, None)
+        
+        # Calculate video age
+        video_age = None
+        upload_date = row.get('publishedAt', row.get('upload_date', row.get('published_at', '')))
+        if upload_date:
+            video_age = calculate_video_age(str(upload_date))
+        
+        # Get video length (duration)
+        video_length = None
+        duration_field = row.get('duration', row.get('videoLength', row.get('video_length', None)))
+        if duration_field:
+            video_length = parse_duration_to_seconds(str(duration_field))
+        
+        # Analyze scenes if video file exists
+        scene_analysis = {"sceneNumber": None, "averageSceneLength": None}
+        if video_path and os.path.exists(video_path):
+            scene_analysis = simple_scene_analysis(video_path)
+        
+        # Extract video dimensions and format
+        video_format = None
+        video_orientation = None
+        if video_path and os.path.exists(video_path):
+            try:
+                dims = get_video_dimensions(video_path)
+                if dims:
+                    video_format = dims['format']
+                    video_orientation = dims['orientation']
+            except Exception as e:
+                print_status(f"Could not extract video dimensions: {e}", "WARNING")
+        
+        result = {
+            'videoId': video_id,
+            'channelId': channel_id,
+            'Followers': followers,
+            'videoAge': video_age,
+            'videoLength': video_length,
+            'sceneNumber': scene_analysis['sceneNumber'],
+            'averageSceneLength': scene_analysis['averageSceneLength'],
+            'format': video_format,
+            'orientation': video_orientation
+        }
+        
+        print_status(f"Basic analysis completed for {video_id}", "SUCCESS")
+        return result
+        
+    except Exception as e:
+        print_status(f"Basic analysis failed: {e}", "ERROR")
+        return None
+
+def analyze_image_only(video_path, video_id):
+    """Quick image analysis workflow."""
+    try:
+        from .image_functions import analyze_video_comprehensive
+        return analyze_video_comprehensive(video_path, video_id)
+    except Exception as e:
+        print_status(f"Image analysis failed: {e}", "ERROR")
+        return None
+
+def analyze_lightweight(video_path, video_id):
+    """Fast analysis - basic + image only."""
+    print_status(f"Starting lightweight analysis for {video_id}", "INFO")
+    
+    results = {
+        'video_id': video_id,
+        'video_path': video_path,
+        'timestamp': get_timestamp()
+    }
+    
+    # Basic features
+    basic_result = analyze_basic_only(video_path, video_id)
+    results['basic'] = basic_result
+    
+    # Image analysis
+    image_result = analyze_image_only(video_path, video_id)
+    results['image'] = image_result
+    
+    print_status(f"Lightweight analysis completed for {video_id}", "SUCCESS")
+    return results

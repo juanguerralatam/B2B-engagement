@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Utility functions for the B2B Engagement project
-Common utilities extracted from various modules for better code organization
+Core Utilities for B2B Engagement Analysis
+Consolidated utilities for file operations, data processing, hardware detection, and more.
 """
 
 import os
@@ -11,7 +11,9 @@ import subprocess
 import sys
 import shutil
 import importlib
+import re
 from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime
 
 # Optional imports with fallbacks
 try:
@@ -26,7 +28,7 @@ except ImportError:
 
 def get_project_root():
     """Get the absolute path to the project root directory."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def ensure_directory_exists(directory_path: str) -> bool:
@@ -81,8 +83,32 @@ def get_file_extension_variants(video_id: str, extensions: List[str]) -> List[st
     return [f"{video_id}{ext}" for ext in extensions]
 
 
+def validate_file_path(file_path: str, must_exist: bool = True) -> bool:
+    """Validate file path."""
+    if not file_path:
+        return False
+    
+    if must_exist:
+        return os.path.exists(file_path)
+    
+    # Check if parent directory exists or can be created
+    parent_dir = os.path.dirname(file_path)
+    return not parent_dir or os.path.exists(parent_dir) or ensure_directory_exists(parent_dir)
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename for cross-platform compatibility."""
+    import re
+    # Remove or replace invalid characters
+    sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
+    # Remove leading/trailing spaces and dots
+    sanitized = sanitized.strip(' .')
+    # Limit length
+    return sanitized[:255]
+
+
 # =============================================================================
-# File Encoding and Reading Utilities
+# Data Processing Utilities
 # =============================================================================
 
 def detect_file_encoding(file_path: str) -> str:
@@ -144,10 +170,6 @@ def load_json_file(file_path: str) -> Optional[Dict]:
         print(f"Error loading JSON file {file_path}: {e}")
         return None
 
-
-# =============================================================================
-# CSV Utilities
-# =============================================================================
 
 def detect_csv_format(csv_file: str) -> Dict[str, Any]:
     """Detect CSV format and delimiter."""
@@ -227,6 +249,112 @@ def write_csv_safe(data: List[Dict], csv_file: str, fieldnames: List[str] = None
         return False
 
 
+def update_csv_record(csv_file: str, record_data: Dict, id_column: str = 'VideoId') -> bool:
+    """
+    Update or append a record to a CSV file. If a record with the same ID exists, 
+    it will be replaced. Otherwise, the record will be appended.
+    
+    Args:
+        csv_file: Path to the CSV file
+        record_data: Dictionary containing the record data
+        id_column: Name of the column used as identifier (default: 'VideoId')
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        import pandas as pd
+        
+        record_id = record_data.get(id_column)
+        if not record_id:
+            print(f"Error: Record data missing {id_column} field")
+            return False
+        
+        # Ensure directory exists
+        directory = os.path.dirname(csv_file) if os.path.dirname(csv_file) else '.'
+        if not ensure_directory_exists(directory):
+            return False
+        
+        if os.path.exists(csv_file):
+            # Read existing data
+            try:
+                existing_df = pd.read_csv(csv_file)
+                # Remove existing entry for this ID if it exists
+                existing_df = existing_df[existing_df[id_column] != record_id]
+                # Add new record
+                new_row_df = pd.DataFrame([record_data])
+                if len(existing_df) > 0:
+                    new_df = pd.concat([existing_df, new_row_df], ignore_index=True)
+                else:
+                    new_df = new_row_df
+            except pd.errors.EmptyDataError:
+                # Handle empty CSV file
+                new_df = pd.DataFrame([record_data])
+        else:
+            # Create new file
+            new_df = pd.DataFrame([record_data])
+        
+        # Save updated data
+        new_df.to_csv(csv_file, index=False)
+        return True
+        
+    except Exception as e:
+        print(f"Error updating CSV file {csv_file}: {e}")
+        return False
+
+
+def check_record_exists(csv_file: str, record_id: str, id_column: str = 'VideoId') -> bool:
+    """
+    Check if a record with the given ID already exists in the CSV file.
+    
+    Args:
+        csv_file: Path to the CSV file
+        record_id: ID to check for
+        id_column: Name of the column used as identifier (default: 'VideoId')
+    
+    Returns:
+        bool: True if record exists, False otherwise
+    """
+    try:
+        import pandas as pd
+        
+        if not os.path.exists(csv_file):
+            return False
+            
+        df = pd.read_csv(csv_file)
+        return record_id in df[id_column].values
+        
+    except Exception:
+        return False
+
+
+def format_analysis_data(data: Dict, precision: int = 3) -> Dict:
+    """
+    Format analysis data with proper rounding and None handling.
+    
+    Args:
+        data: Dictionary with analysis results
+        precision: Number of decimal places for rounding
+    
+    Returns:
+        Dict: Formatted data with proper types
+    """
+    formatted = {}
+    
+    for key, value in data.items():
+        if value is None:
+            formatted[key] = None
+        elif isinstance(value, (int, float)):
+            try:
+                formatted[key] = round(float(value), precision)
+            except (ValueError, TypeError):
+                formatted[key] = None
+        else:
+            formatted[key] = value
+    
+    return formatted
+
+
 def read_channel_ids_from_csv(csv_file: str) -> List[str]:
     """Read channel IDs from CSV file with flexible format support."""
     try:
@@ -259,7 +387,61 @@ def read_channel_ids_from_csv(csv_file: str) -> List[str]:
 
 
 # =============================================================================
-# Hardware Detection Utilities
+# Configuration Management
+# =============================================================================
+
+# Configuration singleton cache
+_cached_config = None
+
+def get_shared_config() -> Dict[str, Any]:
+    """Get cached configuration - loads only once per session."""
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = load_config_file()
+    return _cached_config
+
+def clear_config_cache() -> None:
+    """Clear config cache - useful for testing."""
+    global _cached_config
+    _cached_config = None
+
+def load_config_file(config_path: str = None) -> Dict[str, Any]:
+    """Load configuration from file."""
+    if config_path is None:
+        config_path = os.path.join(get_project_root(), 'config.json')
+    
+    if os.path.exists(config_path):
+        return load_json_file(config_path) or {}
+    
+    # Return default configuration
+    return {
+        "output_directories": {
+            "video": "output/video",
+            "audio": "output/audio", 
+            "text": "output/text",
+            "json": "output/json"
+        },
+        "whisper": {
+            "model": "base",
+            "language": "en"
+        },
+        "video": {
+            "download_format": "mp4",
+            "max_resolution": "720p"
+        }
+    }
+
+
+def save_config_file(config: Dict[str, Any], config_path: str = None) -> bool:
+    """Save configuration to file."""
+    if config_path is None:
+        config_path = os.path.join(get_project_root(), 'config.json')
+    
+    return save_json_file(config, config_path)
+
+
+# =============================================================================
+# Hardware Detection and System Utilities
 # =============================================================================
 
 def check_gpu_availability() -> bool:
@@ -301,10 +483,6 @@ def detect_optimal_device_settings() -> Dict[str, Any]:
     return settings
 
 
-# =============================================================================
-# Package and Dependency Utilities
-# =============================================================================
-
 def check_package_installed(package_name: str, import_name: str = None) -> bool:
     """Check if a package is installed."""
     if import_name is None:
@@ -342,9 +520,41 @@ def check_system_dependencies() -> Dict[str, bool]:
         "python": sys.version_info >= (3, 8),
     }
 
+def detect_optimal_whisper_settings() -> Dict[str, Any]:
+    """Detect optimal Whisper settings based on available hardware."""
+    try:
+        # Check for whisper import
+        try:
+            import whisper
+        except ImportError:
+            pass
+        
+        # Use utils function for device detection
+        device_settings = detect_optimal_device_settings()
+        
+        # Determine recommended model based on memory
+        memory_gb = device_settings['memory_gb']
+        if device_settings['gpu_available'] and memory_gb >= 16:
+            recommended_model = "large"
+        elif memory_gb >= 8:
+            recommended_model = "medium"
+        else:
+            recommended_model = "base"
+        
+        return {
+            "device": device_settings['device'],
+            "recommended_model": recommended_model,
+            "fp16": device_settings['fp16_enabled']
+        }
+        
+    except ImportError as e:
+        return {"device": "cpu", "recommended_model": "base", "fp16": False}
+    except Exception as e:
+        return {"device": "cpu", "recommended_model": "base", "fp16": False}
+
 
 # =============================================================================
-# Progress and Status Utilities
+# Progress, Status, and Validation Utilities
 # =============================================================================
 
 def print_status(message: str, level: str = "INFO") -> None:
@@ -373,13 +583,8 @@ def get_timestamp() -> str:
     try:
         return subprocess.check_output(['date', '+%Y-%m-%d %H:%M:%S']).decode().strip()
     except subprocess.CalledProcessError:
-        from datetime import datetime
         return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-
-# =============================================================================
-# Data Validation Utilities
-# =============================================================================
 
 def validate_video_id(video_id: str) -> bool:
     """Validate YouTube video ID format."""
@@ -389,69 +594,6 @@ def validate_video_id(video_id: str) -> bool:
     # YouTube video IDs contain alphanumeric characters, hyphens, and underscores
     import re
     return bool(re.match(r'^[a-zA-Z0-9_-]{11}$', video_id))
-
-
-def validate_file_path(file_path: str, must_exist: bool = True) -> bool:
-    """Validate file path."""
-    if not file_path:
-        return False
-    
-    if must_exist:
-        return os.path.exists(file_path)
-    
-    # Check if parent directory exists or can be created
-    parent_dir = os.path.dirname(file_path)
-    return not parent_dir or os.path.exists(parent_dir) or ensure_directory_exists(parent_dir)
-
-
-def sanitize_filename(filename: str) -> str:
-    """Sanitize filename for cross-platform compatibility."""
-    import re
-    # Remove or replace invalid characters
-    sanitized = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    # Remove leading/trailing spaces and dots
-    sanitized = sanitized.strip(' .')
-    # Limit length
-    return sanitized[:255]
-
-
-# =============================================================================
-# Configuration Utilities
-# =============================================================================
-
-def load_config_file(config_path: str = None) -> Dict[str, Any]:
-    """Load configuration from file."""
-    if config_path is None:
-        config_path = os.path.join(get_project_root(), 'config.json')
-    
-    if os.path.exists(config_path):
-        return load_json_file(config_path) or {}
-    
-    # Return default configuration
-    return {
-        "output_directories": {
-            "video": "output/video",
-            "audio": "output/audio", 
-            "text": "output/text",
-            "json": "output/json"
-        },
-        "whisper": {
-            "model": "base",
-            "language": "en"
-        },
-        "video": {
-            "download_format": "mp4",
-            "max_resolution": "720p"
-        }
-    }
-
-
-def save_config_file(config: Dict[str, Any], config_path: str = None) -> bool:
-    """Save configuration to file."""
-    if config_path is None:
-        config_path = os.path.join(get_project_root(), 'config.json')
-    
-    return save_json_file(config, config_path)
 
 
 # =============================================================================

@@ -11,14 +11,14 @@ import sys
 analysis_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'analysis')
 sys.path.insert(0, analysis_dir)
 
-from core_functions import (
+from analysis.core_functions import (
     read_video_csv, download_video, process_single_video,
     detect_optimal_whisper_settings, save_scene_analysis, read_scene_analysis
 )
-from image_functions import detect_scenes, detect_gender_in_video, analyze_video_comprehensive
-from utils import (
+from analysis.image_functions import detect_scenes, detect_gender_in_video, analyze_video_comprehensive
+from analysis.utils.core import (
     find_file_in_locations, get_file_extension_variants, validate_video_id,
-    print_status, print_progress, get_output_directory
+    print_status, print_progress, get_output_directory, load_config_file
 )
 
 def parse_arguments():
@@ -28,21 +28,25 @@ def parse_arguments():
     parser.add_argument('--force', action='store_true',
                        help='Force regeneration')
     
-    # Processing modes
+    # Video selection
+    parser.add_argument('--video-id', type=str,
+                       help='Process specific video by ID')
     parser.add_argument('--download-only', action='store_true')
     parser.add_argument('--transcribe-only', action='store_true')
     parser.add_argument('--extract-audio-only', action='store_true')
     parser.add_argument('--narration-only', action='store_true',
                        help='Evaluate narration quality only')
     parser.add_argument('--detect-scenes', action='store_true')
+    # Processing modes
+    parser.add_argument('--analyze-basic-features', action='store_true',
+                       help='Extract basic features (followers, age, length, scenes)')    
     parser.add_argument('--analyze-image-features', action='store_true',
                        help='Analyze comprehensive image features (faces, motion, color, etc.)')
     parser.add_argument('--analyze-audio-features', action='store_true',
                        help='Analyze comprehensive audio features (arousal, valence, pitch)')
     parser.add_argument('--analyze-text-features', action='store_true',
                        help='Analyze comprehensive text features (sentiment, technicality, content)')
-    parser.add_argument('--analyze-basic-features', action='store_true',
-                       help='Extract basic features (followers, age, length, scenes)')
+
     
     return parser.parse_args()
 
@@ -66,7 +70,6 @@ def find_csv_file(csv_file):
     if os.path.exists(csv_file):
         return csv_file
     
-    from utils import load_config_file
     config = load_config_file()
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -89,7 +92,6 @@ def find_video_file(video_id):
         return None
     
     # Load config to get video directory
-    from utils import load_config_file
     config = load_config_file()
     video_dir = os.path.expanduser(config.get('paths', {}).get('video_dir', '~/Downloads/youtube/'))
     
@@ -134,23 +136,17 @@ def process_scene_detection(video_id, video_path, existing_scenes, args):
 
 def process_image_features(video_id, video_path, args):
     """Process comprehensive image feature analysis for a video."""
-    import pandas as pd
     from datetime import datetime
-    from utils import load_config_file
+    from analysis.utils.core import check_record_exists, update_csv_record, format_analysis_data
     
     # Load config to get output file path
     config = load_config_file()
     output_file = config.get("output_files", {}).get("image_features", "output/image_features_analysis.csv")
     
     # Check if already processed
-    if os.path.exists(output_file) and not args.force:
-        try:
-            existing_df = pd.read_csv(output_file)
-            if video_id in existing_df['VideoId'].values:
-                print(f"Image features already analyzed for {video_id}, use --force to regenerate")
-                return True
-        except:
-            pass
+    if not args.force and check_record_exists(output_file, video_id):
+        print(f"Image features already analyzed for {video_id}, use --force to regenerate")
+        return True
     
     if not video_path or not os.path.exists(video_path):
         print(f"Video file not found: {video_path}")
@@ -161,76 +157,47 @@ def process_image_features(video_id, video_path, args):
     # Run comprehensive analysis
     results = analyze_video_comprehensive(video_path, video_id, sample_frames=25)
     
-    if results:
-        # Prepare data for CSV
-        row_data = {
-            'VideoId': video_id,
-            'humanPresence': round(results['humanPresence'], 3),
-            'faceSum': round(results['faceSum'], 3) if results['faceSum'] is not None else None,
-            'Gender': round(results['Gender'], 3) if results['Gender'] is not None else None,
-            'Smile': round(results['Smile'], 3) if results['Smile'] is not None else None,
-            'motionMagnitude': round(results['motionMagnitude'], 3) if results['motionMagnitude'] is not None else None,
-            'motionDirection': round(results['motionDirection'], 3) if results['motionDirection'] is not None else None,
-            'Saturation': round(results['Saturation'], 3),
-            'Brightness': round(results['Brightness'], 3),
-            'frames_analyzed': results['frames_analyzed'],
-            'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        # Save to CSV
-        try:
-            if os.path.exists(output_file):
-                # Append to existing file
-                existing_df = pd.read_csv(output_file)
-                # Remove existing entry for this video if it exists
-                existing_df = existing_df[existing_df['VideoId'] != video_id]
-                # Add new entry - use safer concatenation
-                new_row_df = pd.DataFrame([row_data])
-                if len(existing_df) > 0:
-                    new_df = pd.concat([existing_df, new_row_df], ignore_index=True)
-                else:
-                    new_df = new_row_df
-            else:
-                # Create new file
-                output_dir = config.get("paths", {}).get("output_dir", "output/")
-                os.makedirs(output_dir, exist_ok=True)
-                new_df = pd.DataFrame([row_data])
-            
-            new_df.to_csv(output_file, index=False)
-            
-            print(f"✓ Image features saved for {video_id}")
-            print(f"  Human: {row_data['humanPresence']}, Faces: {row_data['faceSum']}, "
-                  f"Gender: {row_data['Gender']}, Brightness: {row_data['Brightness']:.3f}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error saving image features for {video_id}: {e}")
-            return False
-    else:
+    if not results:
         print(f"Failed to analyze image features for {video_id}")
+        return False
+    
+    # Prepare data for CSV using utility functions
+    row_data = {
+        'VideoId': video_id,
+        'frames_analyzed': results.get('frames_analyzed'),
+        'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    # Add formatted analysis results (excluding non-numeric fields)
+    numeric_results = {k: v for k, v in results.items() 
+                      if k not in ['frames_analyzed', 'VideoId']}
+    formatted_results = format_analysis_data(numeric_results, precision=3)
+    row_data.update(formatted_results)
+    
+    # Save using utility function
+    if update_csv_record(output_file, row_data):
+        print(f"✓ Image features saved for {video_id}")
+        print(f"  Human: {row_data.get('humanPresence')}, Faces: {row_data.get('faceSum')}, "
+              f"Gender: {row_data.get('Gender')}, Brightness: {row_data.get('Brightness')}")
+        return True
+    else:
+        print(f"Error saving image features for {video_id}")
         return False
 
 def process_audio_features(video_id, video_path, args):
     """Process comprehensive audio feature analysis for a video."""
-    import pandas as pd
     from datetime import datetime
-    from audio_functions import extract_audio, analyze_audio_comprehensive
-    from utils import load_config_file
+    from analysis.audio_functions import extract_audio, analyze_audio_comprehensive
+    from analysis.utils.core import check_record_exists, update_csv_record, format_analysis_data
     
     # Load config to get output file path
     config = load_config_file()
     output_file = config.get("output_files", {}).get("audio_features", "output/audio_features_analysis.csv")
     
     # Check if already processed
-    if os.path.exists(output_file) and not args.force:
-        try:
-            existing_df = pd.read_csv(output_file)
-            if video_id in existing_df['VideoId'].values:
-                print(f"Audio features already analyzed for {video_id}, use --force to regenerate")
-                return True
-        except:
-            pass
+    if not args.force and check_record_exists(output_file, video_id):
+        print(f"Audio features already analyzed for {video_id}, use --force to regenerate")
+        return True
     
     if not video_path or not os.path.exists(video_path):
         print(f"Video file not found: {video_path}")
@@ -250,96 +217,113 @@ def process_audio_features(video_id, video_path, args):
     # Run comprehensive audio analysis
     results = analyze_audio_comprehensive(audio_path, video_id)
     
-    if results:
-        # Prepare data for CSV
-        row_data = {
-            'VideoId': video_id,
-            'Arousal': round(float(results['Arousal']), 3) if results['Arousal'] is not None else None,
-            'Valence': round(float(results['Valence']), 3) if results['Valence'] is not None else None,
-            'Pitch': round(float(results['Pitch']), 3) if results['Pitch'] is not None else None,
-            'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        # Save to CSV
-        try:
-            if os.path.exists(output_file):
-                # Append to existing file
-                existing_df = pd.read_csv(output_file)
-                # Remove existing entry for this video if it exists
-                existing_df = existing_df[existing_df['VideoId'] != video_id]
-                # Add new entry - use safer concatenation
-                new_row_df = pd.DataFrame([row_data])
-                if len(existing_df) > 0:
-                    new_df = pd.concat([existing_df, new_row_df], ignore_index=True)
-                else:
-                    new_df = new_row_df
-            else:
-                # Create new file
-                output_dir = config.get("paths", {}).get("output_dir", "output/")
-                os.makedirs(output_dir, exist_ok=True)
-                new_df = pd.DataFrame([row_data])
-            
-            new_df.to_csv(output_file, index=False)
-            
-            print(f"✓ Audio features saved for {video_id}")
-            print(f"  Arousal: {row_data['Arousal']}, Valence: {row_data['Valence']}, "
-                  f"Pitch: {row_data['Pitch']}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"Error saving audio features for {video_id}: {e}")
-            return False
-    else:
+    if not results:
         print(f"Failed to analyze audio features for {video_id}")
+        return False
+    
+    # Prepare data for CSV using utility functions
+    row_data = {
+        'VideoId': video_id,
+        'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    # Add formatted analysis results
+    formatted_results = format_analysis_data(results, precision=3)
+    row_data.update(formatted_results)
+    
+    # Save using utility function
+    if update_csv_record(output_file, row_data):
+        print(f"✓ Audio features saved for {video_id}")
+        print(f"  Arousal: {row_data.get('Arousal')}, Valence: {row_data.get('Valence')}, "
+              f"Pitch: {row_data.get('Pitch')}")
+        return True
+    else:
+        print(f"Error saving audio features for {video_id}")
         return False
 
 def process_text_features(video_id, video_path, args):
     """Process comprehensive text feature analysis for a video."""
-    import pandas as pd
     from datetime import datetime
-    from text_functions import analyze_text_comprehensive
-    from utils import load_config_file
+    from analysis.text_functions import analyze_text_comprehensive
+    from analysis.audio_functions import extract_audio, transcribe_audio
+    from analysis.core_functions import detect_optimal_whisper_settings
+    from analysis.utils.core import check_record_exists, update_csv_record, format_analysis_data
     
     # Load config to get output file paths
     config = load_config_file()
     output_file = config.get("output_files", {}).get("text_features", "output/text_features_analysis.csv")
     
     # Check if already processed
-    if os.path.exists(output_file) and not args.force:
-        try:
-            existing_df = pd.read_csv(output_file)
-            if video_id in existing_df['VideoId'].values:
-                print(f"Text features already analyzed for {video_id}, use --force to regenerate")
-                return True
-        except:
-            pass
+    if not args.force and check_record_exists(output_file, video_id):
+        print(f"Text features already analyzed for {video_id}, use --force to regenerate")
+        return True
     
     print(f"Analyzing text features for {video_id}...")
     
-    # Load video metadata from the configured CSV file (same as basic features)
-    description_file = config.get("paths", {}).get("csv_file", "output/videos_statistics_250_trial.csv")
+    # Load video metadata
+    title, description = load_video_metadata(video_id, config)
+    if not title and not description:
+        print(f"Could not extract text data for video {video_id}")
+        return False
+    
+    print(f"Loaded text data - Title: {len(title)} chars, Description: {len(description)} chars")
+    
+    # Get or generate transcript
+    transcript_path = get_or_generate_transcript(video_id, video_path, args, config)
+    
+    # Run comprehensive text analysis
+    results = analyze_text_comprehensive(video_id, title, description, transcript_path)
+    
+    if not results:
+        print(f"Failed to analyze text features for {video_id}")
+        return False
+    
+    # Prepare data for CSV using utility functions
+    row_data = {
+        'VideoId': video_id,
+        'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    }
+    
+    # Add formatted analysis results
+    formatted_results = format_analysis_data(results, precision=3)
+    row_data.update(formatted_results)
+    
+    # Save using utility function
+    if update_csv_record(output_file, row_data):
+        print(f"✓ Text features saved for {video_id}")
+        print(f"  Title: Sentiment={row_data.get('titleSentiment')}, Tech={row_data.get('titleTechnicality')}")
+        print(f"  Description: Sentiment={row_data.get('descriptionSentiment')}, Tech={row_data.get('descriptionTechnicality')}")
+        print(f"  Content: Hashtags={row_data.get('hashtagsDescription')}, URLs={row_data.get('URLDescription')}")
+        if row_data.get('scriptSentiment') is not None:
+            print(f"  Script: Sentiment={row_data.get('scriptSentiment')}, Tech={row_data.get('scriptTechnicality')}")
+        return True
+    else:
+        print(f"Error saving text features for {video_id}")
+        return False
+
+
+def load_video_metadata(video_id, config):
+    """Load video title and description from metadata file."""
+    import pandas as pd
+    
+    description_file = config.get("output_files", {}).get("video_statistics", "output/videos_statistics.csv")
     if not os.path.exists(description_file):
         print(f"Video metadata file not found: {description_file}")
-        return False
+        return "", ""
     
     try:
         # Read CSV with proper multiline handling
         description_df = pd.read_csv(description_file, encoding='utf-8', quotechar='"', escapechar='\\')
         
-        if description_df.empty:
-            print(f"Description file is empty")
-            return False
-            
-        if 'videoId' not in description_df.columns:
-            print(f"videoId column not found in description file. Available columns: {list(description_df.columns)}")
-            return False
+        if description_df.empty or 'videoId' not in description_df.columns:
+            print(f"Invalid or empty description file")
+            return "", ""
             
         video_row = description_df[description_df['videoId'] == video_id]
         
         if video_row.empty:
             print(f"Video {video_id} not found in description file")
-            return False
+            return "", ""
             
         # Safely extract title and description
         title = str(video_row.iloc[0]['title']) if 'title' in video_row.columns else ""
@@ -351,118 +335,103 @@ def process_text_features(video_id, video_path, args):
         if description == 'nan':
             description = ""
             
-        print(f"Loaded text data - Title: {len(title)} chars, Description: {len(description)} chars")
+        return title, description
         
     except Exception as e:
         print(f"Error reading description file: {e}")
-        print(f"Trying alternative CSV reading method...")
+        # Try alternative reading method for problematic CSV files
+        return load_video_metadata_fallback(video_id, description_file)
+
+
+def load_video_metadata_fallback(video_id, description_file):
+    """Fallback method for loading video metadata from problematic CSV files."""
+    try:
+        with open(description_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        if len(lines) < 2:
+            return "", ""
+            
+        # Parse header
+        header = lines[0].strip().split(',')
         
-        # Alternative reading method for problematic CSV files
-        try:
-            with open(description_file, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                
-            if len(lines) < 2:
-                print("Description file has insufficient data")
-                return False
-                
-            # Parse header
-            header = lines[0].strip().split(',')
-            
-            # Find video data
-            title = ""
-            description = ""
-            
-            for line in lines[1:]:
-                if video_id in line:
-                    # Simple parsing for the specific video
-                    parts = line.split(',', len(header) - 1)
-                    if len(parts) >= len(header):
-                        try:
-                            video_id_col = header.index('videoId')
-                            title_col = header.index('title')
-                            desc_col = header.index('description')
-                            
-                            if parts[video_id_col].strip() == video_id:
-                                title = parts[title_col].strip().strip('"')
-                                description = parts[desc_col].strip().strip('"')
-                                break
-                        except (ValueError, IndexError):
-                            continue
-                            
-            if not title and not description:
-                print(f"Could not extract text data for video {video_id}")
-                return False
-                
-        except Exception as e2:
-            print(f"Alternative reading method also failed: {e2}")
-            return False
+        # Find video data
+        for line in lines[1:]:
+            if video_id in line:
+                parts = line.split(',', len(header) - 1)
+                if len(parts) >= len(header):
+                    try:
+                        video_id_col = header.index('videoId')
+                        title_col = header.index('title')
+                        desc_col = header.index('description')
+                        
+                        if parts[video_id_col].strip() == video_id:
+                            title = parts[title_col].strip().strip('"')
+                            description = parts[desc_col].strip().strip('"')
+                            return title, description
+                    except (ValueError, IndexError):
+                        continue
+                        
+        return "", ""
+        
+    except Exception as e:
+        print(f"Alternative reading method also failed: {e}")
+        return "", ""
+
+
+def get_or_generate_transcript(video_id, video_path, args, config):
+    """Get existing transcript or generate new one from video."""
+    from analysis.audio_functions import extract_audio, transcribe_audio
+    from analysis.core_functions import detect_optimal_whisper_settings
     
-    # Set transcript path
     text_dir = config.get("paths", {}).get("text_dir", "output/text/")
     transcript_path = os.path.join(text_dir, f"{video_id}.txt")
     
-    # Run comprehensive text analysis
-    results = analyze_text_comprehensive(video_id, title, description, transcript_path)
-    
-    if results:
-        # Prepare data for CSV
-        row_data = {
-            'VideoId': video_id,
-            'titleSentiment': round(float(results['titleSentiment']), 3) if results['titleSentiment'] is not None else None,
-            'titleTechnicality': round(float(results['titleTechnicality']), 3) if results['titleTechnicality'] is not None else None,
-            'descriptionSentiment': round(float(results['descriptionSentiment']), 3) if results['descriptionSentiment'] is not None else None,
-            'descriptionTechnicality': round(float(results['descriptionTechnicality']), 3) if results['descriptionTechnicality'] is not None else None,
-            'hashtagsDescription': round(float(results['hashtagsDescription']), 3) if results['hashtagsDescription'] is not None else None,
-            'URLDescription': round(float(results['URLDescription']), 3) if results['URLDescription'] is not None else None,
-            'scriptSentiment': round(float(results['scriptSentiment']), 3) if results['scriptSentiment'] is not None else None,
-            'scriptTechnicality': round(float(results['scriptTechnicality']), 3) if results['scriptTechnicality'] is not None else None,
-            'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
+    # Generate transcript if it doesn't exist
+    if not os.path.exists(transcript_path) or args.force:
+        print(f"Transcript not found, generating from video...")
         
-        # Save to CSV
+        if not video_path or not os.path.exists(video_path):
+            print(f"Video file required for transcription but not found: {video_path}")
+            return transcript_path  # Return path anyway, analysis can work without transcript
+        
         try:
-            if os.path.exists(output_file):
-                # Append to existing file
-                existing_df = pd.read_csv(output_file)
-                # Remove existing entry for this video if it exists
-                existing_df = existing_df[existing_df['VideoId'] != video_id]
-                # Add new entry - use safer concatenation
-                new_row_df = pd.DataFrame([row_data])
-                if len(existing_df) > 0:
-                    new_df = pd.concat([existing_df, new_row_df], ignore_index=True)
+            # Extract audio first
+            audio_dir = config.get("paths", {}).get("audio_dir", "output/audio/")
+            audio_path = os.path.join(audio_dir, f"{video_id}.wav")
+            
+            if not os.path.exists(audio_path):
+                print(f"Extracting audio from {video_id}...")
+                if not extract_audio(video_path, audio_path):
+                    print(f"Failed to extract audio from {video_path}")
+                    return transcript_path
+            
+            if os.path.exists(audio_path):
+                # Transcribe audio
+                print(f"Transcribing audio for {video_id}...")
+                settings = detect_optimal_whisper_settings()
+                model = config.get("defaults", {}).get("model", "base")
+                transcript = transcribe_audio(audio_path, model, settings["device"], settings["fp16"])
+                
+                if transcript:
+                    # Save transcript
+                    os.makedirs(text_dir, exist_ok=True)
+                    with open(transcript_path, 'w', encoding='utf-8') as f:
+                        f.write(transcript)
+                    print(f"✓ Transcript saved: {len(transcript)} characters")
                 else:
-                    new_df = new_row_df
-            else:
-                # Create new file
-                output_dir = config.get("paths", {}).get("output_dir", "output/")
-                os.makedirs(output_dir, exist_ok=True)
-                new_df = pd.DataFrame([row_data])
-            
-            new_df.to_csv(output_file, index=False)
-            
-            print(f"✓ Text features saved for {video_id}")
-            print(f"  Title: Sentiment={row_data['titleSentiment']}, Tech={row_data['titleTechnicality']}")
-            print(f"  Description: Sentiment={row_data['descriptionSentiment']}, Tech={row_data['descriptionTechnicality']}")
-            print(f"  Content: Hashtags={row_data['hashtagsDescription']}, URLs={row_data['URLDescription']}")
-            if row_data['scriptSentiment'] is not None:
-                print(f"  Script: Sentiment={row_data['scriptSentiment']}, Tech={row_data['scriptTechnicality']}")
-            
-            return True
-            
+                    print("Failed to generate transcript")
+                    
         except Exception as e:
-            print(f"Error saving text features for {video_id}: {e}")
-            return False
-    else:
-        print(f"Failed to analyze text features for {video_id}")
-        return False
+            print(f"Error generating transcript: {e}")
+    
+    return transcript_path
 
 def main():
     """Main function."""
     args = parse_arguments()
     
     # Load config file to get settings
-    from utils import load_config_file
     config = load_config_file()
     
     # Get configuration values
@@ -480,13 +449,19 @@ def main():
             for attr in dir(args):
                 if not attr.startswith('_'):
                     setattr(self, attr, getattr(args, attr))
-            # Override with config values
+            # Override with config values only if command line args are not set
             self.model = config_values['model']
             self.csv_file = config_values['csv_file']
             self.video_path = config_values['video_path']
-            self.video_id = config_values['video_id']
-            self.force = config_values['force']
-            self.max_videos = config_values['max_videos']
+            # Don't override video_id if set via command line
+            if not hasattr(args, 'video_id') or not args.video_id:
+                self.video_id = config_values['video_id']
+            self.force = config_values['force'] or getattr(args, 'force', False)
+            # Don't override max_videos if we have a specific video_id
+            if not (hasattr(args, 'video_id') and args.video_id):
+                self.max_videos = config_values['max_videos']
+            else:
+                self.max_videos = None  # No limit when processing specific video
             # Ensure narration attribute exists
             if not hasattr(self, 'narration'):
                 self.narration = False
@@ -516,8 +491,8 @@ def main():
         print_status("No videos found", "ERROR")
         return
     
-    # Filter specific video
-    if args.video_id:
+    # Filter specific video first
+    if hasattr(args, 'video_id') and args.video_id:
         videos = [v for v in videos if v['videoId'] == args.video_id]
         if not videos:
             print_status(f"Video ID '{args.video_id}' not found", "ERROR")
@@ -525,7 +500,7 @@ def main():
     
     # Handle basic features analysis separately (processes all videos at once)
     if args.analyze_basic_features:
-        from basic_functions import extract_basic_features_from_data, load_config
+        from analysis.basic_functions import extract_basic_features_from_data, load_config
         config = load_config()
         
         # Add max_videos to config if specified
@@ -542,10 +517,11 @@ def main():
     # Load existing analysis
     existing_scenes = read_scene_analysis() if args.detect_scenes else {}
     
-    # Apply max_videos limit if specified
-    if hasattr(args, 'max_videos') and args.max_videos and args.max_videos < len(videos):
-        print_status(f"Limiting processing to first {args.max_videos} videos (out of {len(videos)})", "INFO")
-        videos = videos[:args.max_videos]
+    # Apply max_videos limit if specified and no specific video selected
+    if hasattr(args, 'max_videos') and args.max_videos and not (hasattr(args, 'video_id') and args.video_id):
+        if args.max_videos < len(videos):
+            print_status(f"Limiting processing to first {args.max_videos} videos (out of {len(videos)})", "INFO")
+            videos = videos[:args.max_videos]
     
     # Process videos
     successful = 0

@@ -11,9 +11,10 @@ import re
 import torch
 import numpy as np
 from typing import Dict, List, Optional, Tuple
-from utils import (
+from .utils.core import (
     load_text_file_safe, save_json_file, get_output_directory,
-    ensure_directory_exists, print_status, get_timestamp, get_project_root
+    ensure_directory_exists, print_status, get_timestamp, get_project_root,
+    get_shared_config, detect_optimal_whisper_settings
 )
 
 # Import technical vocabularies from external file
@@ -25,8 +26,7 @@ sys.path.insert(0, os.path.join(project_root, 'input'))
 
 try:
     # Load config to get vocabulary file path
-    from utils import load_config_file
-    config = load_config_file()
+    config = get_shared_config()
     vocab_file = config.get("paths", {}).get("technical_vocabularies", "input/technical_vocabularies.json")
     
     # Make absolute path if relative
@@ -196,7 +196,6 @@ def extract_sentiment_bert(text: str) -> Optional[float]:
         
         # Use existing device detection
         try:
-            from core_functions import detect_optimal_whisper_settings
             settings = detect_optimal_whisper_settings()
             device = 0 if settings["device"] == "cuda" else -1
         except:
