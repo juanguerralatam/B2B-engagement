@@ -249,7 +249,7 @@ def write_csv_safe(data: List[Dict], csv_file: str, fieldnames: List[str] = None
         return False
 
 
-def update_csv_record(csv_file: str, record_data: Dict, id_column: str = 'VideoId') -> bool:
+def update_csv_record(csv_file: str, record_data: Dict, id_column: str = 'videoId') -> bool:
     """
     Update or append a record to a CSV file. If a record with the same ID exists, 
     it will be replaced. Otherwise, the record will be appended.

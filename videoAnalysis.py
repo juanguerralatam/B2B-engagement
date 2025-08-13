@@ -46,6 +46,16 @@ def parse_arguments():
                        help='Analyze comprehensive audio features (arousal, valence, pitch)')
     parser.add_argument('--analyze-text-features', action='store_true',
                        help='Analyze comprehensive text features (sentiment, technicality, content)')
+    
+    # Parallel processing options
+    parser.add_argument('--parallel', action='store_true',
+                       help='Enable parallel processing of videos')
+    parser.add_argument('--workers', type=int, default=None,
+                       help='Number of parallel workers (default: auto-detect)')
+    parser.add_argument('--chunk-size', type=int, default=10,
+                       help='Number of videos per chunk (default: 10)')
+    parser.add_argument('--max-videos', type=int, default=None,
+                       help='Maximum number of videos to process (default: all)')
 
     
     return parser.parse_args()
@@ -163,14 +173,14 @@ def process_image_features(video_id, video_path, args):
     
     # Prepare data for CSV using utility functions
     row_data = {
-        'VideoId': video_id,
+        'videoId': video_id,
         'frames_analyzed': results.get('frames_analyzed'),
         'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
     # Add formatted analysis results (excluding non-numeric fields)
     numeric_results = {k: v for k, v in results.items() 
-                      if k not in ['frames_analyzed', 'VideoId']}
+                      if k not in ['frames_analyzed', 'videoId']}
     formatted_results = format_analysis_data(numeric_results, precision=3)
     row_data.update(formatted_results)
     
@@ -223,7 +233,7 @@ def process_audio_features(video_id, video_path, args):
     
     # Prepare data for CSV using utility functions
     row_data = {
-        'VideoId': video_id,
+        'videoId': video_id,
         'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
@@ -280,7 +290,7 @@ def process_text_features(video_id, video_path, args):
     
     # Prepare data for CSV using utility functions
     row_data = {
-        'VideoId': video_id,
+        'videoId': video_id,
         'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     }
     
@@ -523,11 +533,71 @@ def main():
             print_status(f"Limiting processing to first {args.max_videos} videos (out of {len(videos)})", "INFO")
             videos = videos[:args.max_videos]
     
+    # Use parallel processing if requested
+    if args.parallel and not args.analyze_basic_features:
+        return process_videos_parallel(videos, args)
+    
+    # Process videos sequentially (original behavior)
+    return process_videos_sequential(videos, args)
+
+
+def process_videos_parallel(videos, args):
+    """Process videos using simple parallel processing."""
+    from analysis.utils.parallel_processor import process_videos_parallel_simple
+    
+    # Determine number of workers
+    if args.workers:
+        num_workers = args.workers
+    else:
+        import multiprocessing
+        # Auto-detect optimal number of workers based on task type
+        cpu_count = multiprocessing.cpu_count()
+        
+        if args.analyze_image_features:
+            # GPU-bound task, use fewer workers
+            num_workers = min(8, cpu_count // 4)
+        elif args.analyze_audio_features or args.analyze_text_features:
+            # CPU-bound tasks, use more workers
+            num_workers = min(16, cpu_count // 2)
+        else:
+            # Default
+            num_workers = min(8, cpu_count // 4)
+    
+    print_status(f"Starting parallel processing with {num_workers} workers", "INFO")
+    
+    # Determine processing mode
+    if args.analyze_image_features:
+        task_type = 'image'
+    elif args.analyze_audio_features:
+        task_type = 'audio'
+    elif args.analyze_text_features:
+        task_type = 'text'
+    elif args.detect_scenes:
+        task_type = 'scenes'
+    elif args.narration_only:
+        task_type = 'narration'
+    else:
+        task_type = 'normal'
+    
+    # Process videos
+    successful, failed = process_videos_parallel_simple(
+        videos, task_type, max_workers=num_workers, force=args.force
+    )
+    
+    print_status(f"Parallel processing completed: {successful} successful, {failed} failed", "SUCCESS")
+    return successful > 0
+
+
+def process_videos_sequential(videos, args):
+    """Process videos sequentially (original behavior)."""
+    # Load existing analysis
+    existing_scenes = read_scene_analysis() if args.detect_scenes else {}
+    
     # Process videos
     successful = 0
     failed = 0
     total_videos = len(videos)
-    
+
     for i, video in enumerate(videos, 1):
         video_id = video['videoId']
         video_url = video['video_url']
@@ -607,6 +677,8 @@ def main():
             failed += 1
     
     print_status(f"Completed: {successful} successful, {failed} failed", "SUCCESS")
+    return successful > 0
+    
 
 if __name__ == "__main__":
     main()
