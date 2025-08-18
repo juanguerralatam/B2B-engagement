@@ -28,6 +28,7 @@ output/video/
 output/text/
 output/json/
 models/
+test/cookies.txt
 
 
 # API keys and sensitive data
