@@ -114,9 +114,21 @@ __all__ = [
     # Video utilities
     'get_video_dimensions',
     
+    # Video downloader
+    'VideoDownloader',
+    'download_video',
+    'download_videos_from_csv',
+    
     # YOLO availability flag
     'YOLO_AVAILABLE',
 ]
+
+# Video downloader utilities
+from .video_downloader import (
+    VideoDownloader,
+    download_video,
+    download_videos_from_csv
+)
 
 # Conditionally add YOLO exports
 if YOLO_AVAILABLE:

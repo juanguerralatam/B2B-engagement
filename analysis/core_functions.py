@@ -14,70 +14,18 @@ from .utils.core import (
 )
 
 def download_video(video_url, video_id, output_dir=None):
-    """Download video using yt-dlp with videoId as filename."""
+    """
+    Download video using the new VideoDownloader utility.
+    Maintained for backward compatibility.
+    """
     try:
-        from .utils.core import get_shared_config
-        config = get_shared_config()
+        from .utils.video_downloader import VideoDownloader
         
-        if output_dir is None:
-            output_dir = get_output_directory("video")
-        
-        ensure_directory_exists(output_dir)
-        output_path = os.path.join(output_dir, f"{video_id}.%(ext)s")
-        
-        # Get cookies file locations from config
-        cookies_locations = config.get("cookies", {}).get("search_locations", [])
-        
-        # Add dynamic locations relative to project
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        dynamic_locations = [
-            os.path.join(project_root, loc) for loc in cookies_locations
-        ]
-        dynamic_locations.extend([
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), config.get("paths", {}).get("cookies_file", "youtube_cookies.txt")),
-            os.path.join(project_root, config.get("paths", {}).get("cookies_file", "youtube_cookies.txt"))
-        ])
-        
-        cookies_path = None
-        for cookies_file in dynamic_locations:
-            if os.path.exists(cookies_file):
-                cookies_path = cookies_file
-                break
-        
-        download_methods = []
-        
-        if cookies_path:
-            download_methods.append([
-                'yt-dlp', '--cookies', cookies_path,
-                '-f', 'best[height<=720]', '-o', output_path, video_url
-            ])
-        
-        download_methods.extend([
-            ['yt-dlp', '--cookies-from-browser', 'chrome', '-f', 'best[height<=720]', '-o', output_path, video_url],
-            ['yt-dlp', '-f', 'best[height<=720]', '-o', output_path, video_url]
-        ])
-        
-        for i, cmd in enumerate(download_methods, 1):
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-                if result.returncode == 0:
-                    # Get video format from config
-                    video_formats = config.get("output_formats", {}).get("video_format", "mp4")
-                    if isinstance(video_formats, str):
-                        video_formats = [video_formats]
-                    else:
-                        video_formats = ['.mp4', '.mkv', '.webm', '.avi', '.mov']
-                    
-                    for ext in [f'.{fmt}' if not fmt.startswith('.') else fmt for fmt in video_formats]:
-                        test_path = os.path.join(output_dir, f"{video_id}{ext}")
-                        if os.path.exists(test_path):
-                            return test_path
-            except:
-                continue
-        
-        return None
+        downloader = VideoDownloader(output_dir=output_dir)
+        return downloader.download_video(video_url, video_id)
         
     except Exception as e:
+        print_status(f"Download error: {e}", "ERROR")
         return None
 
 def read_video_csv(csv_file):

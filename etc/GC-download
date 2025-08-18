@@ -1,0 +1,278 @@
+#!/usr/bin/env python3
+"""
+Optimized YouTube Downloader with GCS Upload
+- Avoids bot detection with cookies, Android client, random delays
+- Parallel but safe fragment downloading
+- Optional Google Cloud Storage upload + cleanup
+"""
+
+import os
+import sys
+import csv
+import re
+import shutil
+import time
+import random
+import logging
+from pathlib import Path
+from typing import List, Set, Tuple, Optional
+
+import yt_dlp
+from yt_dlp.postprocessor import PostProcessor
+from google.cloud import storage
+
+# ==================== CONFIGURATION ==================== #
+class Config:
+    # Files and paths
+    CSV_FILE: Path = Path("videos_statistics.csv")
+    OUTPUT_DIR: Path = Path.home() / "Downloads" / "YouTube"
+
+    # GCS settings
+    BUCKET_NAME: str = "b2b-juanguerra"
+    UPLOAD_TO_GCS: bool = True
+    CLEANUP_AFTER_UPLOAD: bool = True
+
+    # Download settings
+    AUDIO_ONLY: bool = False
+    QUALITY: str = "worst"
+    FORCE_REDOWNLOAD: bool = False
+    MAX_VIDEOS: int = 2500
+
+    # Cookies
+    COOKIES_FILE: Optional[Path] = Path("cookies.txt")  # Exported cookies.txt
+    COOKIES_FROM_BROWSER: Optional[str] = None               # e.g., "chrome"
+
+    # Performance tuning
+    CPU_COUNT: int = os.cpu_count() or 4
+    CONCURRENT_FRAGMENTS: int = 8  # Keep low to avoid detection
+    MIN_FREE_SPACE_GB: float = 0.5
+    BATCH_CHECK_SIZE: int = 1000
+    BATCH_DOWNLOAD_SIZE: int = 50  # Per batch processing
+
+# Ensure output directory exists
+Config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# ==================== LOGGING ==================== #
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+log = logging.getLogger(__name__)
+
+# ==================== UTILITIES ==================== #
+def check_disk_space() -> bool:
+    """Check if enough disk space is available."""
+    free_gb = shutil.disk_usage(Config.OUTPUT_DIR).free / (1024**3)
+    if free_gb < Config.MIN_FREE_SPACE_GB:
+        log.warning(f"Low disk space: {free_gb:.1f} GB free")
+        return free_gb >= 0.2
+    return True
+
+def extract_video_id(url: str) -> str:
+    """Extract YouTube video ID from URL."""
+    patterns = [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([^&\n?#]+)',
+        r'youtube\.com/v/([^&\n?#]+)',
+    ]
+    for pattern in patterns:
+        if match := re.search(pattern, url):
+            return match.group(1)
+    return url.split('/')[-1].split('?')[0]
+
+# ==================== GCS UPLOADER ==================== #
+class GCSUploader(PostProcessor):
+    """Uploads videos to Google Cloud Storage."""
+    def __init__(self, bucket_name: str, cleanup: bool):
+        super().__init__()
+        try:
+            self.storage_client = storage.Client()
+            self.bucket = self.storage_client.bucket(bucket_name)
+        except Exception as e:
+            log.error(f"GCS init failed: {e}")
+            self.storage_client = None
+        self.cleanup = cleanup
+
+    def run(self, info):
+        if not self.storage_client:
+            return [], info
+
+        local_path = Path(info.get('filepath', ''))
+        if not local_path.exists():
+            return [], info
+
+        blob = self.bucket.blob(local_path.name)
+        log.info(f"GCS Upload: {local_path.name}")
+
+        try:
+            # Fixed: Remove chunk_size parameter - not supported in upload_from_filename
+            blob.upload_from_filename(str(local_path))
+            log.info(f"Upload complete: {local_path.name}")
+            
+            # Return file for cleanup if requested
+            return ([str(local_path)] if self.cleanup else [], info)
+        except Exception as e:
+            log.error(f"Upload failed: {e}")
+            return [], info
+
+def get_existing_videos(bucket_name: str, audio_only: bool) -> Set[str]:
+    """Get set of already uploaded video IDs."""
+    extensions = ['.mp3'] if audio_only else ['.mp4', '.mkv', '.webm', '.avi', '.mov']
+    existing_ids = set()
+
+    try:
+        client = storage.Client()
+        bucket = client.bucket(bucket_name)
+        log.info("Checking existing GCS files...")
+
+        page_token = None
+        while True:
+            blobs_page = bucket.list_blobs(page_size=Config.BATCH_CHECK_SIZE, page_token=page_token)
+            page = next(blobs_page.pages)
+            for blob in page:
+                if any(blob.name.lower().endswith(ext) for ext in extensions):
+                    existing_ids.add(Path(blob.name).stem.split(' - ')[0])
+            page_token = blobs_page.next_page_token
+            if not page_token:
+                break
+
+        log.info(f"Found {len(existing_ids)} existing videos.")
+    except Exception as e:
+        log.warning(f"Could not check GCS: {e}")
+
+    return existing_ids
+
+# ==================== yt-dlp OPTIONS ==================== #
+def build_yt_dlp_opts() -> dict:
+    """Build yt-dlp options tuned to avoid bot detection, but with safe fallbacks."""
+    opts = {
+        "outtmpl": str(Config.OUTPUT_DIR / "%(id)s.%(ext)s"),
+        "format_sort": ["+size", "+br", "+res", "+fps"],
+
+        # Keep concurrency safe
+        "concurrent_fragments": min(Config.CONCURRENT_FRAGMENTS, 8),
+
+        # Random delay between requests
+        "sleep_interval": 2,
+        "max_sleep_interval": 4,
+
+        # Retry logic
+        "retries": 3,
+        "fragment_retries": 5,
+        "quiet": True,
+        "no_warnings": True,
+
+        # Player client fallback order — avoids hard failure
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"],  # Try Android first, then web
+            }
+        }
+    }
+
+    # Cookie handling
+    if Config.COOKIES_FILE and Config.COOKIES_FILE.exists():
+        opts["cookiefile"] = str(Config.COOKIES_FILE)
+        log.info(f"Using cookies from file: {Config.COOKIES_FILE}")
+    elif Config.COOKIES_FROM_BROWSER:
+        opts["cookiesfrombrowser"] = (Config.COOKIES_FROM_BROWSER,)
+        log.info(f"Using cookies from browser: {Config.COOKIES_FROM_BROWSER}")
+    else:
+        log.warning(
+            "No cookies configured — you may encounter bot detection. "
+            "Export with: yt-dlp --cookies-from-browser chrome --cookies cookies.txt"
+        )
+
+    return opts
+# ==================== DOWNLOAD LOGIC ==================== #
+def cleanup_download_folder():
+    """Clean up the entire download folder to avoid disk space issues."""
+    try:
+        if Config.OUTPUT_DIR.exists():
+            # Remove all files in the download directory
+            for file_path in Config.OUTPUT_DIR.glob("*"):
+                if file_path.is_file():
+                    file_path.unlink()
+                    log.info(f"Deleted: {file_path.name}")
+            log.info(f"Cleaned up download folder: {Config.OUTPUT_DIR}")
+    except Exception as e:
+        log.error(f"Failed to cleanup download folder: {e}")
+
+def download_batch(urls: List[str]) -> Tuple[int, int]:
+    """Download a batch of videos."""
+    if not urls:
+        return 0, 0
+
+    ydl_opts = build_yt_dlp_opts()
+    success, fail = 0, 0
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        if Config.UPLOAD_TO_GCS:
+            ydl.add_post_processor(GCSUploader(Config.BUCKET_NAME, Config.CLEANUP_AFTER_UPLOAD), when='after_move')
+
+        for url in urls:
+            if not check_disk_space():
+                log.error("Insufficient disk space. Stopping.")
+                break
+            try:
+                log.info(f"Downloading: {extract_video_id(url)}")
+                ydl.download([url])
+                success += 1
+                time.sleep(random.uniform(0.5, 1.5))  # Small delay between videos
+            except Exception as e:
+                log.error(f"Failed {extract_video_id(url)}: {e}")
+                fail += 1
+
+    # Clean up any remaining files after batch completion
+    if Config.CLEANUP_AFTER_UPLOAD:
+        cleanup_download_folder()
+
+    return success, fail
+
+# ==================== MAIN ==================== #
+def main():
+    if not Config.CSV_FILE.exists():
+        log.error(f"CSV file not found: {Config.CSV_FILE}")
+        sys.exit(1)
+
+    # Read CSV URLs
+    try:
+        with Config.CSV_FILE.open(newline='', encoding='utf-8') as f:
+            urls = [row['video_url'] for row in csv.DictReader(f) if row.get('video_url')]
+    except Exception as e:
+        log.error(f"CSV read error: {e}")
+        sys.exit(1)
+
+    if not urls:
+        log.info("No URLs found.")
+        return
+
+    # Apply max limit
+    if Config.MAX_VIDEOS and len(urls) > Config.MAX_VIDEOS:
+        urls = urls[:Config.MAX_VIDEOS]
+        log.info(f"Limited to {len(urls)} videos.")
+
+    # Remove existing videos
+    if not Config.FORCE_REDOWNLOAD:
+        existing = get_existing_videos(Config.BUCKET_NAME, Config.AUDIO_ONLY)
+        urls = [u for u in urls if extract_video_id(u) not in existing]
+        if not urls:
+            log.info("All videos already in GCS.")
+            return
+
+    # Batch processing
+    total_success, total_fail = 0, 0
+    start_time = time.time()
+
+    for i in range(0, len(urls), Config.BATCH_DOWNLOAD_SIZE):
+        batch = urls[i:i + Config.BATCH_DOWNLOAD_SIZE]
+        log.info(f"=== Batch {i // Config.BATCH_DOWNLOAD_SIZE + 1} ===")
+        success, fail = download_batch(batch)
+        total_success += success
+        total_fail += fail
+        elapsed = time.time() - start_time
+        avg_time = elapsed / max(total_success + total_fail, 1)
+        log.info(f"Batch done: {success} success, {fail} failed (avg {avg_time:.1f}s/video)")
+
+    log.info("=== DOWNLOAD COMPLETE ===")
+    log.info(f"Total: {total_success} success, {total_fail} failed")
+    log.info(f"Time: {time.time() - start_time:.1f}s")
+
+if __name__ == "__main__":
+    main()

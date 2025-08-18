@@ -2,13 +2,13 @@
   "paths": {
     "input_dir": "input/",
     "output_dir": "output/",
-    "video_dir": "~/Downloads/youtube/",
+    "video_dir": "/home/juan/Downloads/youtube/",
     "audio_dir": "output/audio/",
     "text_dir": "output/text/",
     "json_dir": "output/json/",
     "channels_file": "input/channels.csv",
     "video_path": null,
-    "cookies_file": "youtube_cookies.txt",
+    "cookies_file": "test/youtube_cookies.txt",
     "technical_vocabularies": "input/technical_vocabularies.json"
   },
   "output_files": {
@@ -33,7 +33,7 @@
     "model": "base",
     "video_id": null,
     "force": false,
-    "max_videos": 200
+    "max_videos": 270
   },
   "thresholds": {
     "whisper_confidence": 0.8,
